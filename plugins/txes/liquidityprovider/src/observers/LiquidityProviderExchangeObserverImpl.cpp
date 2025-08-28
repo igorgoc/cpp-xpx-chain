@@ -1,27 +1,14 @@
 /**
-*** Copyright (c) 2016-present,
-*** Jaguar0625, gimre, BloodyRookie, Tech Bureau, Corp. All rights reserved.
-***
-*** This file is part of Catapult.
-***
-*** Catapult is free software: you can redistribute it and/or modify
-*** it under the terms of the GNU Lesser General Public License as published by
-*** the Free Software Foundation, either version 3 of the License, or
-*** (at your option) any later version.
-***
-*** Catapult is distributed in the hope that it will be useful,
-*** but WITHOUT ANY WARRANTY; without even the implied warranty of
-*** MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-*** GNU Lesser General Public License for more details.
-***
-*** You should have received a copy of the GNU Lesser General Public License
-*** along with Catapult. If not, see <http://www.gnu.org/licenses/>.
+*** Copyright 2022 ProximaX Limited. All rights reserved.
+*** Use of this source code is governed by the Apache 2.0
+*** license that can be found in the LICENSE file.
 **/
 
 #pragma once
-#include <catapult/cache_core/AccountStateCache.h>
+#include "catapult/cache_core/AccountStateCache.h"
 #include "src/utils/TransferUtils.h"
 #include "src/cache/LiquidityProviderCache.h"
+#include "src/model/LiquidityProviderReceiptType.h"
 #include "LiquidityProviderExchangeObserverImpl.h"
 
 namespace catapult::observers {
@@ -80,10 +67,14 @@ namespace catapult::observers {
 		auto debtorAccountIter = accountStateCache.find(currencyDebtor);
 		auto& debtorAccount = debtorAccountIter.get();
 
-		if ( debtorAccount.Balances.get(currencyMosaicId) < currencyAmount ) {
-			CATAPULT_LOG( error ) << "Debtor Not Enough Currency "
-				<< debtorAccount.Balances.get(currencyMosaicId) << " "
-				<< currencyAmount;
+		context.StatementBuilder().addTransactionReceipt(model::BalanceChangeReceipt(
+			model::Receipt_Type_Currency_Debit, currencyDebtor, currencyMosaicId, currencyAmount));
+
+		auto debtorCurrencyBalance = debtorAccount.Balances.get(currencyMosaicId);
+		if (debtorCurrencyBalance < currencyAmount) {
+			context.StatementBuilder().addTransactionReceipt(model::BalanceChangeReceipt(
+				model::Receipt_Type_Debtor_Currency_Balance_Insufficient, currencyDebtor, currencyMosaicId, debtorCurrencyBalance));
+			CATAPULT_LOG( error ) << "Debtor Not Enough Currency " << debtorCurrencyBalance << " " << currencyAmount;
 			return;
 		}
 
@@ -94,10 +85,16 @@ namespace catapult::observers {
 		auto creditorAccountIter = accountStateCache.find(mosaicCreditor);
 		auto& creditorAccount = creditorAccountIter.get();
 		creditorAccount.Balances.credit(resolvedMosaicId, mosaicAmount);
+		context.StatementBuilder().addTransactionReceipt(model::BalanceChangeReceipt(
+			model::Receipt_Type_Mosaic_Credit, mosaicCreditor, resolvedMosaicId, mosaicAmount));
 
 		lpEntry.setAdditionallyMinted(lpEntry.additionallyMinted() + mosaicAmount);
+		context.StatementBuilder().addTransactionReceipt(model::BalanceChangeReceipt(
+			model::Receipt_Type_Additionally_Minted, lpEntry.providerKey(), resolvedMosaicId, lpEntry.additionallyMinted()));
 
 		lpEntry.recentTurnover().m_turnover = lpEntry.recentTurnover().m_turnover + currencyAmount;
+		context.StatementBuilder().addTransactionReceipt(model::BalanceChangeReceipt(
+			model::Receipt_Type_Turnover, lpEntry.providerKey(), currencyMosaicId, lpEntry.recentTurnover().m_turnover));
 	}
 
 	void LiquidityProviderExchangeObserverImpl::debitMosaics(
@@ -128,35 +125,44 @@ namespace catapult::observers {
 				mosaicAmount,
 				pluginConfig.PercentsDigitsAfterDot);
 
-		if ( lpAccount.Balances.get(currencyMosaicId) < currencyAmount ) {
-			CATAPULT_LOG( error ) << "LP Not Enough Currency "
-								<< lpAccount.Balances.get(currencyMosaicId) << " "
-								<< currencyAmount;
+		context.StatementBuilder().addTransactionReceipt(model::BalanceChangeReceipt(
+			model::Receipt_Type_Mosaic_Debit, mosaicDebtor, resolvedMosaicId, mosaicAmount));
+
+		auto lpCurrencyBalance = lpAccount.Balances.get(currencyMosaicId);
+		if (lpCurrencyBalance < currencyAmount) {
+			context.StatementBuilder().addTransactionReceipt(model::BalanceChangeReceipt(
+				model::Receipt_Type_Liquidity_Provider_Currency_Balance_Insufficient, lpEntry.providerKey(), currencyMosaicId, lpCurrencyBalance));
+			CATAPULT_LOG( error ) << "LP Not Enough Currency " << lpCurrencyBalance << " " << currencyAmount;
 			return;
 		}
 
 		auto debtorAccountIter = accountStateCache.find(mosaicDebtor);
 		auto& debtorAccount = debtorAccountIter.get();
 
-		if ( debtorAccount.Balances.get(resolvedMosaicId) < mosaicAmount ) {
-			CATAPULT_LOG( error ) << "Debtor Not Enough Mosaics "
-								<< mosaicDebtor << " "
-								<< resolvedMosaicId << ""
-								<< debtorAccount.Balances.get(resolvedMosaicId) << " "
-								<< mosaicAmount;
+		auto debtorMosaicBalance = debtorAccount.Balances.get(resolvedMosaicId);
+		if (debtorMosaicBalance < mosaicAmount) {
+			context.StatementBuilder().addTransactionReceipt(model::BalanceChangeReceipt(
+				model::Receipt_Type_Debtor_Mosaic_Balance_Insufficient, mosaicDebtor, resolvedMosaicId, debtorMosaicBalance));
+			CATAPULT_LOG( error ) << "Debtor Not Enough Mosaics " << mosaicDebtor << " " << resolvedMosaicId << " " << debtorMosaicBalance << " " << mosaicAmount;
 			return;
 		}
 
 		auto creditorAccountIter = accountStateCache.find(currencyCreditor);
 		auto& creditorAccount = creditorAccountIter.get();
 		creditorAccount.Balances.credit(currencyMosaicId, currencyAmount);
+		context.StatementBuilder().addTransactionReceipt(model::BalanceChangeReceipt(
+			model::Receipt_Type_Currency_Credit, currencyCreditor, currencyMosaicId, currencyAmount));
 
 		lpAccount.Balances.debit(currencyMosaicId, currencyAmount);
 
 		debtorAccount.Balances.debit(resolvedMosaicId, mosaicAmount);
 
 		lpEntry.setAdditionallyMinted(lpEntry.additionallyMinted() - mosaicAmount);
+		context.StatementBuilder().addTransactionReceipt(model::BalanceChangeReceipt(
+			model::Receipt_Type_Additionally_Minted, lpEntry.providerKey(), resolvedMosaicId, lpEntry.additionallyMinted()));
 
 		lpEntry.recentTurnover().m_turnover = lpEntry.recentTurnover().m_turnover + currencyAmount;
+		context.StatementBuilder().addTransactionReceipt(model::BalanceChangeReceipt(
+			model::Receipt_Type_Turnover, lpEntry.providerKey(), currencyMosaicId, lpEntry.recentTurnover().m_turnover));
 	}
-} // namespace catapult::observers
+}

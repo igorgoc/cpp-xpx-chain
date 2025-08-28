@@ -91,6 +91,9 @@ namespace catapult { namespace model {
 
 		/// Replicator deposit.
 		Replicator_Deposit = 0x14,
+
+		/// Liquidity provider.
+		Liquidity_Provider = 0x15,
 	};
 
 	/// Enumeration of receipt types.
