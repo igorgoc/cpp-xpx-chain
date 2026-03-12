@@ -70,7 +70,7 @@ namespace catapult { namespace mongo {
 
 			static void SetValue(BulkWriteResult& result, int32_t value) {
 				result.NumUpserted = value / 25;
-				result.NumModified = value - result.NumUpserted;
+				result.NumMatched = value - result.NumUpserted;
 			}
 		};
 	}

@@ -70,7 +70,7 @@ namespace catapult { namespace mongo {
 	}
 
 	void MongoErrorPolicy::checkUpserted(uint64_t numExpected, const BulkWriteResult& result, const std::string& itemsDescription) const {
-		auto numActual = mappers::ToUint32(result.NumModified) + mappers::ToUint32(result.NumUpserted);
+		auto numActual = mappers::ToUint32(result.NumMatched) + mappers::ToUint32(result.NumUpserted);
 		if (CheckExact(numExpected, numActual, m_mode))
 			return;
 

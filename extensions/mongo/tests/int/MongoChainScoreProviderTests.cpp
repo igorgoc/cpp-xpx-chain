@@ -81,15 +81,18 @@ namespace catapult { namespace mongo {
 		AssertDbScore(score);
 	}
 
-	TEST(TEST_CLASS, CannotSaveSameScoreTwiceWhenErrorModeIsStrict) {
+	TEST(TEST_CLASS, CanSaveSameScoreTwiceWhenErrorModeIsStrict) {
 		// Arrange:
 		TestContext context;
 		model::ChainScore score(0x12345670, 0x89ABCDEF);
 
 		context.chainScoreProvider().saveScore(score);
 
-		// Act + Assert:
-		EXPECT_THROW(context.chainScoreProvider().saveScore(score), catapult_runtime_error);
+		// Act: saving the same score succeeds because MongoDB matches the existing document
+		context.chainScoreProvider().saveScore(score);
+
+		// Assert:
+		AssertDbScore(score);
 	}
 
 	TEST(TEST_CLASS, CanSaveSameScoreTwiceWhenErrorModeIsIdempotent) {
