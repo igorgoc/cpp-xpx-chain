@@ -4,6 +4,17 @@
 
 FROM ghcr.io/proximax-storage/proximax-sirius-deps:bookworm AS basic
 
+RUN apt-get update && apt-get install --no-install-recommends -y \
+    # keep only packages not provided by the deps image (test libs)
+    libgtest-dev \
+    libbenchmark-dev \
+    googletest \
+    && rm -rf /var/lib/apt/lists/*
+
+# NOTE: mongo-cxx (mongocxx/bsoncxx) is provided by the deps image
+# ghcr.io/proximax-storage/proximax-sirius-deps:bookworm, so we don't
+# rebuild it here. This saves many minutes in CI.
+
 # Copy local directory to image
 COPY . /catapult
 
