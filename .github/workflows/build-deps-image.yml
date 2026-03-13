@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - add-github-workflow
     paths:
       - 'scripts/catapult-server-docker/Dockerfile.deps'
   workflow_dispatch:
