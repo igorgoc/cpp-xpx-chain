@@ -22,7 +22,8 @@ COPY . /catapult
 RUN cd /catapult \
     && rm -rf _build \
     && mkdir _build && cd _build \
-    && cmake -DCMAKE_BUILD_TYPE=Release  \\n    -DCMAKE_CXX_FLAGS="-pthread" \
+    && cmake -DCMAKE_BUILD_TYPE=Release  \
+    -DCMAKE_CXX_FLAGS="-pthread" \
     .. \
     && make publish \
     && make \
