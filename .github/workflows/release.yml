@@ -36,7 +36,8 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: ./scripts/catapult-server-docker/DockerfileDebian
+          # Use the deps-based Dockerfile for faster builds (prebuilt deps image)
+          file: ./scripts/catapult-server-docker/DockerfileDebian-linux-deps
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
