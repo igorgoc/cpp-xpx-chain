@@ -41,14 +41,16 @@ RUN apt-get update \
 
 WORKDIR /usr/local/src
 
-# Build and install mongo-cxx (r3.6.7 to match existing Dockerfiles)
-RUN curl -fsSL -O https://github.com/mongodb/mongo-cxx-driver/releases/download/r3.6.7/mongo-cxx-driver-r3.6.7.tar.gz \
-  && tar -xzf mongo-cxx-driver-r3.6.7.tar.gz \
-  && mkdir mongo-cxx-driver-r3.6.7/build && cd mongo-cxx-driver-r3.6.7/build \
-  && cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DBSONCXX_POLY_USE_BOOST=1 .. \
-  && make -j$(nproc) && make install \
-  && cd /usr/local/src && rm -rf mongo-cxx-driver-r3.6.7* \
-  && ldconfig
+# Build and install mongo-c driver then mongo-cxx driver (match existing Dockerfiles)
+RUN set -eux; \
+  # Build only the mongo-cxx-driver (assume libmongoc-dev provided by apt)
+  curl -fsSL -O https://github.com/mongodb/mongo-cxx-driver/releases/download/r3.6.7/mongo-cxx-driver-r3.6.7.tar.gz && \
+  tar -xzf mongo-cxx-driver-r3.6.7.tar.gz && \
+  mkdir -p mongo-cxx-driver-r3.6.7/build && cd mongo-cxx-driver-r3.6.7/build && \
+  cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DBSONCXX_POLY_USE_BOOST=1 .. && \
+  make -j$(nproc) && make install && \
+  cd /usr/local/src && rm -rf mongo-cxx-driver-r3.6.7* && \
+  ldconfig
 
 LABEL maintainer="proximax-storage"
 ENV PATH="/usr/local/bin:${PATH}"
