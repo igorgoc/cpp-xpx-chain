@@ -7,6 +7,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
   && apt-get install --no-install-recommends -y \
+    software-properties-common \
     curl \
     git \
     build-essential \
@@ -36,8 +37,11 @@ RUN apt-get update \
     libboost-random-dev \
     libzmq3-dev \
     cppzmq-dev \
+    libgtest-dev \
+    libbenchmark-dev \
+    googletest \
     pkgconf \
-  && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/local/src
 
