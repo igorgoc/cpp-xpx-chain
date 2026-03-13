@@ -12,8 +12,12 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: Checkout code (with submodules)
         uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'    # fetch submodules
+          fetch-depth: 0             # fetch full history (recommended for tags/submodule refs)
+          token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
