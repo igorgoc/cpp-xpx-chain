@@ -6,6 +6,7 @@ FROM ghcr.io/proximax-storage/proximax-sirius-deps:bookworm AS basic
 
 RUN apt-get update && apt-get install --no-install-recommends -y \
     # keep only packages not provided by the deps image (test libs)
+    software-properties-common \
     libgtest-dev \
     libbenchmark-dev \
     googletest \
