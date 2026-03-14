@@ -93,15 +93,12 @@ RUN cd /catapult \
     api \
     connection \
     drive \
-    grpc \
     ionet \
-    messenger-server \
     model \
     net \
     nodediscovery \
     sdk_external \
     storage-crypto \
-    supercontract-server \
     torrent-sirius \
     utils \
     -j$(nproc)
@@ -132,24 +129,9 @@ RUN cp -r /catapult/_build/lib /deps/sirius/ && \
 FROM debian:bookworm
 
 # copy required libs
-RUN mkdir /sirius
 COPY --from=basic /deps/sirius/ /sirius/
-
-RUN apt-get update && apt-get install --no-install-recommends -y \
-   libboost-atomic-dev \
-   libboost-date-time-dev \
-   libboost-regex-dev \
-   libboost-system-dev \
-   libboost-timer-dev \
-   libboost-chrono-dev \
-   libboost-log-dev \
-   libboost-thread-dev \
-   libboost-filesystem-dev \
-   libboost-program-options-dev \
-   libboost-stacktrace-dev \
-   libboost-random-dev \
-   libzstd-dev \
-   librocksdb-dev
+COPY --from=basic /deps/usr/ /usr/
+COPY --from=basic /deps/lib/ /lib/
 
 # copy executables
 COPY --from=basic /catapult/_build/bin /sirius/bin
