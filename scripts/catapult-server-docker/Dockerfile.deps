@@ -5,56 +5,54 @@ FROM debian:bookworm
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update \
-  && apt-get install --no-install-recommends -y \
-    software-properties-common \
-    curl \
-    git \
-    build-essential \
-    cmake \
-    pkg-config \
-    ca-certificates \
-    wget \
-    libmongoc-1.0-0 \
-    libmongoc-dev \
-    libzstd-dev \
-    librocksdb-dev \
-    libczmq-dev \
-    libsasl2-dev \
-    libssl-dev \
-    libboost-dev \
-    libboost-atomic-dev \
-    libboost-date-time-dev \
-    libboost-regex-dev \
-    libboost-system-dev \
-    libboost-timer-dev \
-    libboost-chrono-dev \
-    libboost-log-dev \
-    libboost-thread-dev \
-    libboost-filesystem-dev \
-    libboost-program-options-dev \
-    libboost-stacktrace-dev \
-    libboost-random-dev \
-    libzmq3-dev \
-    cppzmq-dev \
-    libgtest-dev \
-    libbenchmark-dev \
-    googletest \
-    pkgconf \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install --no-install-recommends -y \
+  software-properties-common \
+  curl \
+  git \
+  build-essential \
+  cmake \
+  pkg-config \
+  libgtest-dev \
+  libbenchmark-dev \
+  librocksdb-dev \
+  libczmq-dev \
+  libsasl2-dev \
+  libssl-dev \
+  libmongoc-1.0-0 \
+  libmongoc-dev \
+  libzstd-dev \
+  googletest \
+  libzmq3-dev \
+  cppzmq-dev
 
 WORKDIR /usr/local/src
 
-# Build and install mongo-c driver then mongo-cxx driver (match existing Dockerfiles)
-RUN set -eux; \
-  # Build only the mongo-cxx-driver (assume libmongoc-dev provided by apt)
-  curl -fsSL -O https://github.com/mongodb/mongo-cxx-driver/releases/download/r3.6.7/mongo-cxx-driver-r3.6.7.tar.gz && \
+# boost
+RUN curl -OL https://archives.boost.io/release/1.86.0/source/boost_1_86_0.tar.gz \
+  && tar xzf boost_1_86_0.tar.gz && cd boost_1_86_0 \
+  && ./bootstrap.sh && ./b2 toolset=gcc install --prefix=/usr/local -j$(nproc)
+
+# Install mongo-cxx
+RUN curl -OL https://github.com/mongodb/mongo-cxx-driver/releases/download/r3.6.7/mongo-cxx-driver-r3.6.7.tar.gz && \
   tar -xzf mongo-cxx-driver-r3.6.7.tar.gz && \
-  mkdir -p mongo-cxx-driver-r3.6.7/build && cd mongo-cxx-driver-r3.6.7/build && \
+  cd mongo-cxx-driver-r3.6.7/build && \
   cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DBSONCXX_POLY_USE_BOOST=1 .. && \
-  make -j$(nproc) && make install && \
-  cd /usr/local/src && rm -rf mongo-cxx-driver-r3.6.7* && \
-  ldconfig
+  make -j$(nproc) && \
+  make install
+
+# Remove downloads
+RUN rm mongo-cxx-driver-r3.6.7.tar.gz && rm boost_1_86_0.tar.gz
+
+# # Build and install mongo-c driver then mongo-cxx driver (match existing Dockerfiles)
+# RUN set -eux; \
+#   # Build only the mongo-cxx-driver (assume libmongoc-dev provided by apt)
+#   curl -fsSL -O https://github.com/mongodb/mongo-cxx-driver/releases/download/r3.6.7/mongo-cxx-driver-r3.6.7.tar.gz && \
+#   tar -xzf mongo-cxx-driver-r3.6.7.tar.gz && \
+#   mkdir -p mongo-cxx-driver-r3.6.7/build && cd mongo-cxx-driver-r3.6.7/build && \
+#   cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DBSONCXX_POLY_USE_BOOST=1 .. && \
+#   make -j$(nproc) && make install && \
+#   cd /usr/local/src && rm -rf mongo-cxx-driver-r3.6.7* && \
+#   ldconfig
 
 LABEL maintainer="proximax-storage"
 ENV PATH="/usr/local/bin:${PATH}"
