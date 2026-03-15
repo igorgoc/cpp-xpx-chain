@@ -51,7 +51,7 @@ jobs:
           push: true
           tags: |
             ghcr.io/${{ github.repository_owner }}/proximax-sirius-chain:${{ github.ref_name }}
-            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/proximax-sirius-chain:${{ github.ref_name }}
+            docker.io/proximax/proximax-sirius-chain:${{ github.ref_name }}
 
   # build-arm64:
   #   runs-on: ubuntu-latest
