@@ -1,0 +1,143 @@
+# For running nodes locally (build using prebuilt deps image)
+# This is a variant of DockerfileDebian-linux that uses the reusable deps image
+# so the expensive dependency builds (mongo-cxx, boost, etc.) are provided.
+
+FROM ghcr.io/proximax-storage/proximax-sirius-deps:bookworm AS basic
+
+# Copy local directory to image
+COPY . /catapult
+
+# Build Catapult Server
+RUN cd /catapult \
+    && rm -rf _build \
+    && mkdir _build && cd _build \
+    && cmake -DCMAKE_BUILD_TYPE=Release  \
+    -DCMAKE_CXX_FLAGS="-pthread" \
+    .. \
+    && make publish \
+    && make \
+# Required extensions
+    catapult.mongo.plugins.accountlink \
+    catapult.mongo.plugins.aggregate \
+    catapult.mongo.plugins.committee \
+    catapult.mongo.plugins.config \
+    catapult.mongo.plugins.contract \
+    catapult.mongo.plugins.dbrb \
+    catapult.mongo.plugins.exchange \
+    catapult.mongo.plugins.exchangesda \
+    catapult.mongo.plugins.liquidityprovider \
+    catapult.mongo.plugins.lockhash \
+    catapult.mongo.plugins.locksecret \
+    catapult.mongo.plugins.metadata \
+    catapult.mongo.plugins.metadata_v2 \
+    catapult.mongo.plugins.mosaic \
+    catapult.mongo.plugins.multisig \
+    catapult.mongo.plugins.namespace \
+    catapult.mongo.plugins.operation \
+    catapult.mongo.plugins.property \
+    catapult.mongo.plugins.service \
+    catapult.mongo.plugins.storage \
+    catapult.mongo.plugins.streaming \
+    catapult.mongo.plugins.supercontract \
+    catapult.mongo.plugins.transfer \
+    catapult.mongo.plugins.upgrade \
+    catapult.plugins.accountlink \
+    catapult.plugins.aggregate \
+    catapult.plugins.committee \
+    catapult.plugins.config \
+    catapult.plugins.contract \
+    catapult.plugins.dbrb \
+    catapult.plugins.exchange \
+    catapult.plugins.exchangesda \
+    catapult.plugins.hashcache \
+    catapult.plugins.hashcache.cache \
+    catapult.plugins.liquidityprovider \
+    catapult.plugins.lockhash \
+    catapult.plugins.locksecret \
+    catapult.plugins.metadata \
+    catapult.plugins.metadata_v2 \
+    catapult.plugins.mosaic \
+    catapult.plugins.multisig \
+    catapult.plugins.namespace \
+    catapult.plugins.operation \
+    catapult.plugins.property \
+    catapult.plugins.service \
+    catapult.plugins.signature \
+    catapult.plugins.storage \
+    catapult.plugins.streaming \
+    catapult.plugins.supercontract \
+    catapult.plugins.transfer \
+    catapult.plugins.upgrade \
+    extension.addressextraction \
+    extension.diagnostics \
+    extension.eventsource \
+    extension.fastfinality \
+    extension.filespooling \
+    extension.harvesting \
+    extension.hashcache \
+    extension.mongo \
+    extension.networkheight \
+    extension.nodediscovery \
+    extension.packetserver \
+    extension.partialtransaction \
+    extension.pluginhandlers \
+    extension.storage \
+    extension.sync \
+    extension.syncsource \
+    extension.timesync \
+    extension.transactionsink \
+    extension.unbondedpruning \
+    extension.zeromq \
+    torrent-sirius \
+    replicator-service \
+    api \
+    connection \
+    drive \
+    ionet \
+    model \
+    net \
+    nodediscovery \
+    sdk_external \
+    storage-crypto \
+    torrent-sirius \
+    utils \
+    -j$(nproc)
+
+RUN cd /catapult/_build && make \
+# Catapult
+    sirius.bc \
+    catapult.broker \
+    catapult.recovery \
+    catapult.tools.address \
+    catapult.tools.benchmark \
+    catapult.tools.health \
+    catapult.tools.nemgen \
+    catapult.tools.nemgen.blockhashes \
+    catapult.tools.network \
+    catapult.tools.statusgen \
+    -j$(nproc)
+
+# script for copying required libs to temporary folder /deps
+RUN /catapult/scripts/release-script/copyDeps.sh /catapult/_build/bin/ /deps
+WORKDIR /deps/sirius
+RUN cp -r /catapult/_build/lib /deps/sirius/ && \
+    rm -rf /deps/home
+
+#------------------------
+# Actual target image which only contains the required binaries
+#------------------------
+FROM debian:bookworm
+
+# copy required libs
+COPY --from=basic /deps/sirius/ /sirius/
+COPY --from=basic /deps/usr/ /usr/
+COPY --from=basic /deps/lib/ /lib/
+
+# copy executables
+COPY --from=basic /catapult/_build/bin /sirius/bin
+
+# sirius.bc as the entry point
+ENTRYPOINT ["/sirius/bin/sirius.bc"]
+
+# set the config directory by default
+CMD ["/chainconfig"]
