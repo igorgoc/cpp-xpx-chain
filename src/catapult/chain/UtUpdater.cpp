@@ -80,8 +80,9 @@ namespace catapult { namespace chain {
 				auto pUnconfirmedCatapultCache = m_detachedCatapultCache.getAndTryLock();
 				if (!pUnconfirmedCatapultCache) {
 					// if there is no unconfirmed cache state, it means that a block update is forthcoming
-					// just add all to the cache and they will be validated later
-					addAll(modifier, utInfos);
+					// add non-expired transactions to the cache; they will be fully validated later
+					auto currentTime = m_timeSupplier();
+					addAll(modifier, utInfos, currentTime);
 					for (auto i = 0u; i < utInfos.size(); ++i) {
 						results[i].Type = UtUpdateResult::UpdateType::Neutral;
 					}
@@ -238,9 +239,13 @@ namespace catapult { namespace chain {
 			return m_throttle(utInfo, { transactionSource, m_detachedCatapultCache.height(), cache, applyState.Modifier });
 		}
 
-		void addAll(cache::UtCacheModifierProxy& modifier, const std::vector<model::TransactionInfo>& utInfos) {
-			for (const auto& utInfo : utInfos)
+		void addAll(cache::UtCacheModifierProxy& modifier, const std::vector<model::TransactionInfo>& utInfos, Timestamp currentTime) {
+			for (const auto& utInfo : utInfos) {
+				if (utInfo.pEntity->Deadline <= currentTime)
+					continue;
+
 				modifier.add(utInfo);
+			}
 		}
 
 	private:

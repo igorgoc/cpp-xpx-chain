@@ -838,6 +838,42 @@ namespace catapult { namespace chain {
 		context.assertEntityInfos({});
 	}
 
+	TEST(TEST_CLASS, ExpiredTransactionsAreFilteredWhenUnconfirmedCacheIsStale) {
+		// Arrange: initialize the UT cache with 3 transactions
+		UpdaterTestContext context;
+		auto originalTransactionData = CreateTransactionData(3);
+		test::AddAll(context.transactionsCache(), originalTransactionData.UtInfos);
+
+		// - modify the catapult cache after creating the updater
+		context.seedDifficultyInfos(7);
+
+		// - prepare 4 new transactions: 2 expired (deadline <= Default_Time) and 2 valid
+		auto timeOffset = Default_Time.unwrap() + 1;
+		auto utInfos = test::CreateTransactionInfos(4, [timeOffset](auto i) {
+			// first 2 have expired deadlines, last 2 have valid deadlines
+			return i < 2 ? Timestamp(Default_Time.unwrap() - i) : Timestamp((timeOffset + i) * (timeOffset + i));
+		});
+		auto hashes = test::ExtractHashes(utInfos);
+
+		// Sanity:
+		EXPECT_EQ(3u, context.transactionsCache().view().size());
+
+		// Act:
+		context.updater().update(utInfos);
+
+		// Assert: the cache contains original transactions and only the 2 non-expired new ones
+		EXPECT_EQ(5u, context.transactionsCache().view().size());
+		test::AssertContainsAll(context.transactionsCache(), originalTransactionData.Hashes);
+		EXPECT_FALSE(context.transactionsCache().view().contains(hashes[0]));
+		EXPECT_FALSE(context.transactionsCache().view().contains(hashes[1]));
+		EXPECT_TRUE(context.transactionsCache().view().contains(hashes[2]));
+		EXPECT_TRUE(context.transactionsCache().view().contains(hashes[3]));
+
+		// - neither the validator nor observer were passed any entities
+		context.assertContexts({});
+		context.assertEntityInfos({});
+	}
+
 	// endregion
 
 	// region update (block disruptor)
