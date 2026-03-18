@@ -76,14 +76,16 @@ namespace catapult { namespace networkheight {
 				locator.registerRootedService("networkChainHeight", pNetworkChainHeight);
 
 				// if the local node's chain is too far behind, some operations like harvesting or
-				// processing of pushed elements should not be allowed
-				// for a public network this should always return true since an evil node could supply a fake chain height
-				state.hooks().setChainSyncedPredicate([&storage = state.storage(), &networkChainHeight = *pNetworkChainHeight,
-						networkIdentifier = state.config().Immutable.NetworkIdentifier]() {
-					if (model::NetworkIdentifier::Public == networkIdentifier)
+				// processing of pushed elements (including unconfirmed transactions) should not be allowed
+				// note: network chain height is derived from median of multiple peers, so it is
+				// reasonably trustworthy even on public networks
+				state.hooks().setChainSyncedPredicate([&storage = state.storage(), &networkChainHeight = *pNetworkChainHeight]() {
+					auto networkHeight = networkChainHeight.load();
+					if (0 == networkHeight)
 						return true;
+
 					auto storageView = storage.view();
-					return networkChainHeight.load() < storageView.chainHeight().unwrap() + 4;
+					return networkHeight < storageView.chainHeight().unwrap() + 4;
 				});
 
 				// add tasks
