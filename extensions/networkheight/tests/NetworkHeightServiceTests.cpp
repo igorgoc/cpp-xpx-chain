@@ -158,6 +158,14 @@ namespace catapult { namespace networkheight {
 		AssertChainSyncedPredicate(23, 1000, false);
 	}
 
+	TEST(TEST_CLASS, ChainSyncedPredicateHookReturnsTrueWhenNetworkHeightIsZero) {
+		// Assert: before any height detection has run, the predicate should return true
+		//         to avoid blocking operations during initial startup
+		AssertChainSyncedPredicate(1, 0, true);
+		AssertChainSyncedPredicate(23, 0, true);
+		AssertChainSyncedPredicate(100, 0, true);
+	}
+
 	// endregion
 
 	// region network chain height detection
