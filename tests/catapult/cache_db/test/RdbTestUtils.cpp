@@ -48,6 +48,36 @@ namespace catapult { namespace test {
 		seedDb(m_dbDirGuard.name(), columns, seeder, compactionFilter);
 	}
 
+	namespace {
+		// Overload for RocksDB 9.x+ (takes std::unique_ptr<rocksdb::DB>*)
+		template<typename TDb = rocksdb::DB>
+		auto OpenDbCompatible(
+				const rocksdb::Options& options,
+				const std::string& name,
+				const std::vector<rocksdb::ColumnFamilyDescriptor>& columnFamilies,
+				std::vector<rocksdb::ColumnFamilyHandle*>* pHandles,
+				std::unique_ptr<rocksdb::DB>& pDb,
+				int)
+			-> decltype(TDb::Open(options, name, columnFamilies, pHandles, &pDb)) {
+			return TDb::Open(options, name, columnFamilies, pHandles, &pDb);
+		}
+
+		// Overload for RocksDB <= 8.x (takes rocksdb::DB**)
+		template<typename TDb = rocksdb::DB>
+		auto OpenDbCompatible(
+				const rocksdb::Options& options,
+				const std::string& name,
+				const std::vector<rocksdb::ColumnFamilyDescriptor>& columnFamilies,
+				std::vector<rocksdb::ColumnFamilyHandle*>* pHandles,
+				std::unique_ptr<rocksdb::DB>& pDb,
+				long) {
+			rocksdb::DB* rawDb = nullptr;
+			auto status = TDb::Open(options, name, columnFamilies, pHandles, &rawDb);
+			pDb.reset(rawDb);
+			return status;
+		}
+	}
+
 	bool DbInitializer::seedDb(
 			const std::string& dbDir,
 			const std::vector<std::string>& columns,
@@ -56,7 +86,7 @@ namespace catapult { namespace test {
 		if (!seeder)
 			return false;
 
-		rocksdb::DB* pDb;
+		std::unique_ptr<rocksdb::DB> pDb;
 		rocksdb::Options dbOptions;
 		dbOptions.create_if_missing = true;
 		dbOptions.create_missing_column_families = true;
@@ -69,8 +99,7 @@ namespace catapult { namespace test {
 			columnFamilies.push_back(rocksdb::ColumnFamilyDescriptor(name, defaultColumnOptions));
 
 		std::vector<rocksdb::ColumnFamilyHandle*> handles;
-		auto status = rocksdb::DB::Open(dbOptions, dbDir, columnFamilies, &handles, &pDb);
-		std::unique_ptr<rocksdb::DB> pDbGuard(pDb);
+		auto status = OpenDbCompatible(dbOptions, dbDir, columnFamilies, &handles, pDb, 0);
 		std::vector<std::shared_ptr<rocksdb::ColumnFamilyHandle>> handleGuards;
 		for (auto* pHandle : handles) {
 			handleGuards.emplace_back(pHandle, [&db = *pDb](auto* pColumnHandle) {
@@ -78,7 +107,7 @@ namespace catapult { namespace test {
 			});
 		}
 
-		seeder(*pDbGuard, handles);
+		seeder(*pDb, handles);
 		return true;
 	}
 
