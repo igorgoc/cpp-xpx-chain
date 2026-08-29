@@ -66,7 +66,7 @@ namespace catapult { namespace test {
 				, m_isClosed(false)
 				, m_pAcceptor(CreateLocalHostAcceptor(ioContext)) {
 			// setup the timer
-			m_timer.expires_from_now(std::chrono::seconds(2 * test::detail::Default_Wait_Timeout));
+			m_timer.expires_after(std::chrono::seconds(2 * test::detail::Default_Wait_Timeout));
 			m_timer.async_wait([this](const auto& ec) {
 				if (boost::asio::error::operation_aborted == ec)
 					return;
