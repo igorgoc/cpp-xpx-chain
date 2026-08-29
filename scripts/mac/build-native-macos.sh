@@ -28,11 +28,12 @@ mkdir -p _build && cd _build
 
 echo "-> Running CMake configuration..."
 cmake \
+  -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_CXX_COMPILER="$CLANG_PATH" \
   -DCMAKE_C_COMPILER="$CLANG_C_PATH" \
   -DBOOST_ROOT="$BOOST_PREFIX" \
-  -DOPENSSL_ROOT_DIR=/opt/homebrew/opt/openssl@3 \
+  -DOPENSSL_ROOT_DIR="${OPENSSL_ROOT_DIR:-/opt/homebrew/opt/openssl@3}" \
   -DENABLE_MONGO=OFF \
   -DENABLE_ZEROMQ=OFF \
   -DXPX_STORAGE_SDK_NOT_BUILD_EXAMPLES=ON \
