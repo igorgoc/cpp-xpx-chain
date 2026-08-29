@@ -1,0 +1,86 @@
+name: Build & Release macOS ARM64
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release Tag (e.g. v1.9.8-arm64)'
+        required: false
+        default: 'test-build-arm64'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build-macos-arm64:
+    name: Compile & Package macOS Apple Silicon (ARM64)
+    runs-on: macos-14
+    steps:
+      - name: Checkout Source Code (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install Build Dependencies (Homebrew)
+        run: |
+          brew update
+          brew install llvm@17 boost openssl@3 rocksdb zstd cmake ninja
+
+      - name: Configure and Compile C++ Engine
+        run: |
+          export BOOST_ROOT="$(brew --prefix boost)"
+          export CMAKE_CXX_COMPILER="$(brew --prefix llvm@17)/bin/clang++"
+          export CMAKE_C_COMPILER="$(brew --prefix llvm@17)/bin/clang"
+          export OPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
+          
+          echo "Building with Boost: $BOOST_ROOT, Clang: $CMAKE_CXX_COMPILER"
+          ./scripts/mac/build-native-macos.sh
+
+      - name: Bundle Relocatable Dynamic Libraries
+        run: |
+          python3 scripts/mac/bundle_dylib_deps.py _build/bin
+
+      - name: Create Release Archives (.tar.zst and .tar.gz)
+        run: |
+          TAG_NAME="${{ github.ref_name }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG_NAME="${{ github.event.inputs.release_tag }}"
+          fi
+          echo "RELEASE_TAG=${TAG_NAME}" >> $GITHUB_ENV
+          
+          mkdir -p release_assets
+          # Create ultra-compressed .tar.zst for fast-sync and in-app updates
+          tar -C _build/bin -c --zstd -f "release_assets/sirius-macos-arm64-${TAG_NAME}.tar.zst" .
+          # Create standard .tar.gz
+          tar -C _build/bin -czf "release_assets/sirius-macos-arm64-${TAG_NAME}.tar.gz" .
+          
+          # Generate SHA256 checksums
+          cd release_assets
+          shasum -a 256 * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: "ProximaX Sirius Core Native (macOS ARM64) ${{ env.RELEASE_TAG }}"
+          body: |
+            ### ProximaX Sirius Core Native Engine - Apple Silicon (ARM64)
+            
+            Standalone native pre-compiled binaries and plugins for Apple Silicon (M1 / M2 / M3 / M4).
+            
+            #### Assets Included:
+            - **`sirius-macos-arm64-${{ env.RELEASE_TAG }}.tar.zst`**: High-speed compressed bundle for node manager in-app updates.
+            - **`sirius-macos-arm64-${{ env.RELEASE_TAG }}.tar.gz`**: Standard compressed release archive.
+            - **`SHA256SUMS.txt`**: Cryptographic integrity checksums.
+          files: release_assets/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
