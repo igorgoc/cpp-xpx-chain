@@ -37,3 +37,9 @@ out
 gen
 cmake-build-*
 temp
+.aider*
+
+# CMake test files
+CTestTestfile.cmake
+.DS_Store
+

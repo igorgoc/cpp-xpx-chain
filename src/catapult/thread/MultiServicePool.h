@@ -47,6 +47,24 @@ namespace catapult { namespace thread {
 			return 0;
 		}
 
+		/// Concurrency level for compute/cryptographic validation tasks (uses physical hardware cores).
+		static size_t DefaultComputeConcurrency() {
+			auto hardwareThreads = std::thread::hardware_concurrency();
+			return 0 == hardwareThreads ? 4 : hardwareThreads;
+		}
+
+		/// Concurrency level for I/O bound network packet tasks (clamped to 2-4 threads).
+		static size_t DefaultIoConcurrency() {
+			auto hardwareThreads = std::thread::hardware_concurrency();
+			return 0 == hardwareThreads ? 2 : std::min<size_t>(4, hardwareThreads);
+		}
+
+		/// Concurrency level for sequential consensus state machines and updaters (1-2 threads max).
+		static size_t DefaultFsmConcurrency() {
+			auto hardwareThreads = std::thread::hardware_concurrency();
+			return 0 == hardwareThreads ? 1 : std::min<size_t>(2, hardwareThreads);
+		}
+
 	public:
 		// region ServiceGroup
 
@@ -236,7 +254,26 @@ namespace catapult { namespace thread {
 
 	private:
 		static std::shared_ptr<thread::IoThreadPool> CreateThreadPool(size_t numWorkerThreads, const std::string& name) {
-			numWorkerThreads = DefaultPoolConcurrency() == numWorkerThreads ? std::thread::hardware_concurrency() : numWorkerThreads;
+			if (DefaultPoolConcurrency() == numWorkerThreads) {
+				auto hardwareThreads = std::thread::hardware_concurrency();
+				if (0 == hardwareThreads)
+					hardwareThreads = 4;
+
+				if (name.find("validator") != std::string::npos || name.find("proposal") != std::string::npos) {
+					// CPU-bound cryptographic verification: scale to physical hardware threads
+					numWorkerThreads = hardwareThreads;
+				} else if (name.find("fsm") != std::string::npos || name.find("dbrb") != std::string::npos || name.find("ptUpdater") != std::string::npos) {
+					// Sequential state machines (FSM): 1-2 dedicated threads max to eliminate lock contention
+					numWorkerThreads = std::min<size_t>(2, hardwareThreads);
+				} else if (name.find("server") != std::string::npos || name.find("packet") != std::string::npos || name.find("io") != std::string::npos) {
+					// I/O bound network packet handling: clamped to 2-4 threads
+					numWorkerThreads = std::min<size_t>(4, hardwareThreads);
+				} else {
+					// Default pool concurrency: scale to physical hardware threads
+					numWorkerThreads = hardwareThreads;
+				}
+			}
+
 			auto pPool = thread::CreateIoThreadPool(numWorkerThreads, name.c_str());
 			pPool->start();
 			return std::move(pPool);
