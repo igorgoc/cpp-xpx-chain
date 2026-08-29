@@ -731,15 +731,15 @@ namespace catapult { namespace ionet {
 							options))
 					, m_resolver(ioContext)
 					, m_host(endpoint.Host)
-					, m_query(m_host, std::to_string(endpoint.Port))
+					, m_port(std::to_string(endpoint.Port))
 					, m_protocols(options.OutgoingProtocols)
 					, m_isCancelled(false)
 			{}
 
 		public:
 			void start() {
-				m_resolver.async_resolve(m_query, m_wrapper.wrap([this](const auto& ec, auto iter) {
-					this->handleResolve(ec, std::move(iter));
+				m_resolver.async_resolve(m_host, m_port, m_wrapper.wrap([this](const auto& ec, const auto& results) {
+					this->handleResolve(ec, results);
 				}));
 			}
 
@@ -755,13 +755,13 @@ namespace catapult { namespace ionet {
 			}
 
 		private:
-			void handleResolve(const boost::system::error_code& ec, Resolver::iterator&& iter) {
+			void handleResolve(const boost::system::error_code& ec, const Resolver::results_type& results) {
 				if (shouldAbort(ec, "resolving address"))
 					return invokeCallback(ConnectResult::Resolve_Error);
 
 				auto foundMatchingProtocol = false;
-				while (Resolver::iterator() != iter) {
-					auto endpoint = iter->endpoint();
+				for (const auto& entry : results) {
+					auto endpoint = entry.endpoint();
 					if (HasFlag(IpProtocol::IPv4, m_protocols) && boost::asio::ip::tcp::v4() == endpoint.protocol()) {
 						m_endpoint = endpoint;
 						foundMatchingProtocol = true;
@@ -779,8 +779,6 @@ namespace catapult { namespace ionet {
 						if (!HasFlag(IpProtocol::IPv4, m_protocols))
 							break;
 					}
-
-					++iter;
 				}
 
 				if (!foundMatchingProtocol)
@@ -841,7 +839,7 @@ namespace catapult { namespace ionet {
 			std::shared_ptr<StrandedSslPacketSocket> m_pSocket;
 			Resolver m_resolver;
 			std::string m_host;
-			Resolver::query m_query;
+			std::string m_port;
 			IpProtocol m_protocols;
 			bool m_isCancelled;
 			boost::asio::ip::tcp::endpoint m_endpoint;

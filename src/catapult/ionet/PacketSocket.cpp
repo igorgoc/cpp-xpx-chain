@@ -409,14 +409,14 @@ namespace catapult { namespace ionet {
 					, m_pSocket(std::make_shared<StrandedPacketSocket>(ioContext, options))
 					, m_resolver(ioContext)
 					, m_host(endpoint.Host)
-					, m_query(m_host, std::to_string(endpoint.Port))
+					, m_port(std::to_string(endpoint.Port))
 					, m_isCancelled(false)
 			{}
 
 		public:
 			void start() {
-				m_resolver.async_resolve(m_query, m_wrapper.wrap([this](const auto& ec, auto iterator) {
-					this->handleResolve(ec, iterator);
+				m_resolver.async_resolve(m_host, m_port, m_wrapper.wrap([this](const auto& ec, const auto& results) {
+					this->handleResolve(ec, results);
 				}));
 			}
 
@@ -432,11 +432,14 @@ namespace catapult { namespace ionet {
 			}
 
 		private:
-			void handleResolve(const boost::system::error_code& ec, const Resolver::iterator& iterator) {
+			void handleResolve(const boost::system::error_code& ec, const Resolver::results_type& results) {
 				if (shouldAbort(ec, "resolving address"))
 					return invokeCallback(ConnectResult::Resolve_Error);
 
-				m_endpoint = iterator->endpoint();
+				if (results.empty())
+					return invokeCallback(ConnectResult::Resolve_Error);
+
+				m_endpoint = results.begin()->endpoint();
 				m_pSocket->impl().async_connect(m_endpoint, m_wrapper.wrap([this](const auto& connectEc) {
 					this->handleConnect(connectEc);
 				}));
@@ -474,7 +477,7 @@ namespace catapult { namespace ionet {
 			std::shared_ptr<StrandedPacketSocket> m_pSocket;
 			Resolver m_resolver;
 			std::string m_host;
-			Resolver::query m_query;
+			std::string m_port;
 			bool m_isCancelled;
 			boost::asio::ip::tcp::endpoint m_endpoint;
 		};
