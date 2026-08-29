@@ -26,6 +26,8 @@
 #include "catapult/utils/NamedObject.h"
 #include <boost/thread.hpp>
 #include <atomic>
+#include <condition_variable>
+#include <mutex>
 
 namespace catapult { namespace disruptor { class ConsumerEntry; } }
 
@@ -90,5 +92,7 @@ namespace catapult { namespace disruptor {
 		std::atomic<size_t> m_numActiveElements;
 
 		std::shared_mutex m_addMutex; // mutex to serialize access to Disruptor::add
+		std::mutex m_cvMutex;
+		std::condition_variable m_cv;
 	};
 }}

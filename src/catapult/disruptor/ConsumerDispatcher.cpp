@@ -69,7 +69,11 @@ namespace catapult { namespace disruptor {
 				while (pThis->m_keepRunning) {
 					auto* pDisruptorElement = pThis->tryNext(consumerEntry);
 					if (!pDisruptorElement) {
-						std::this_thread::sleep_for(std::chrono::milliseconds(10));
+						std::unique_lock<std::mutex> lock(pThis->m_cvMutex);
+						pThis->m_cv.wait_for(lock, std::chrono::milliseconds(100), [pThis, &consumerEntry]() {
+							return !pThis->m_keepRunning
+									|| pThis->m_barriers[consumerEntry.level()].position() != consumerEntry.position();
+						});
 						continue;
 					}
 
@@ -78,6 +82,7 @@ namespace catapult { namespace disruptor {
 						pThis->m_disruptor.markSkipped(consumerEntry.position(), result.CompletionCode);
 
 					pThis->advance(consumerEntry);
+					pThis->m_cv.notify_all();
 				}
 			});
 		}
@@ -91,6 +96,7 @@ namespace catapult { namespace disruptor {
 
 	void ConsumerDispatcher::shutdown() {
 		m_keepRunning = false;
+		m_cv.notify_all();
 		m_threads.join_all();
 	}
 
@@ -114,6 +120,7 @@ namespace catapult { namespace disruptor {
 		while (true) {
 			auto consumerBarrierPosition = m_barriers[consumerEntry.level()].position();
 			auto consumerPosition = consumerEntry.position();
+
 			if (consumerPosition == consumerBarrierPosition)
 				return nullptr;
 
@@ -167,6 +174,7 @@ namespace catapult { namespace disruptor {
 
 		// need to atomically check spare capacity AND add element
 		std::unique_lock lock(m_addMutex);
+
 		if (!canProcessNextElement()) {
 			if (m_shouldThrowIfFull)
 				CATAPULT_THROW_RUNTIME_ERROR("consumer is too far behind");
@@ -177,6 +185,7 @@ namespace catapult { namespace disruptor {
 		++m_numActiveElements;
 		auto id = m_disruptor.add(std::move(input), wrap(processingComplete));
 		m_barriers[0].advance();
+		m_cv.notify_all();
 		return id;
 	}
 
