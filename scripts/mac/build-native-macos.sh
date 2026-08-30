@@ -27,6 +27,9 @@ fi
 echo "-> Applying automated Boost compatibility patches across all submodules..."
 python3 scripts/mac/patch_boost_compat.py
 
+OPENSSL_PREFIX="${OPENSSL_ROOT_DIR:-$(brew --prefix openssl@3 2>/dev/null || echo /opt/homebrew/opt/openssl@3)}"
+ROCKSDB_PREFIX="${ROCKSDB_ROOT_DIR:-$(brew --prefix rocksdb 2>/dev/null || echo /opt/homebrew/opt/rocksdb)}"
+
 mkdir -p _build && cd _build
 
 echo "-> Running CMake configuration..."
@@ -36,11 +39,12 @@ cmake \
   -DCMAKE_CXX_COMPILER="$CLANG_PATH" \
   -DCMAKE_C_COMPILER="$CLANG_C_PATH" \
   -DBOOST_ROOT="$BOOST_PREFIX" \
-  -DOPENSSL_ROOT_DIR="${OPENSSL_ROOT_DIR:-/opt/homebrew/opt/openssl@3}" \
+  -DOPENSSL_ROOT_DIR="$OPENSSL_PREFIX" \
+  -DROCKSDB_ROOT_DIR="$ROCKSDB_PREFIX" \
   -DENABLE_MONGO=OFF \
   -DENABLE_ZEROMQ=OFF \
   -DXPX_STORAGE_SDK_NOT_BUILD_EXAMPLES=ON \
-  -DCMAKE_CXX_FLAGS="-pthread" \
+  -DCMAKE_CXX_FLAGS="-pthread -Wno-missing-template-arg-list-after-template-kw" \
   ..
 
 echo "-> Generating headers (make publish)..."

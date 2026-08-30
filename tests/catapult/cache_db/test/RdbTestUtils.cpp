@@ -90,6 +90,7 @@ namespace catapult { namespace test {
 		rocksdb::Options dbOptions;
 		dbOptions.create_if_missing = true;
 		dbOptions.create_missing_column_families = true;
+		dbOptions.max_open_files = 512;
 
 		rocksdb::ColumnFamilyOptions defaultColumnOptions;
 		defaultColumnOptions.compaction_filter = compactionFilter;

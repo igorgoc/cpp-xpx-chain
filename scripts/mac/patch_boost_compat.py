@@ -96,6 +96,36 @@ def main():
                     ("ioContext.reset();", "ioContext.restart();")
                 ])
 
+    # 6. Patch storage SDK C++ standard headers (sha256 Utils.cpp)
+    for root, dirs, files in os.walk(ROOT_DIR):
+        if "_build" in root or ".git" in root:
+            continue
+        for file in files:
+            if file == "Utils.cpp" and "sha256" in root:
+                filepath = os.path.join(root, file)
+                patch_file(filepath, [
+                    ("#include <assert.h>", "#include <cassert>"),
+                    ("#include <errno.h>", "#include <cerrno>"),
+                    ("#include <limits.h>", "#include <climits>"),
+                    ("#include <signal.h>", "#include <csignal>"),
+                    ("#include <stddef.h>", "#include <cstddef>"),
+                    ("#include <stdint.h>", "#include <cstdint>"),
+                    ("#include <stdlib.h>", "#include <cstdlib>"),
+                    ("#include <string.h>", "#include <cstring>")
+                ])
+
+    # 7. Patch storage SDK CMakeLists.txt for Boost system component
+    for root, dirs, files in os.walk(ROOT_DIR):
+        if "_build" in root or ".git" in root:
+            continue
+        for file in files:
+            if file == "CMakeLists.txt" and "cpp-xpx-storage-sdk" in root:
+                filepath = os.path.join(root, file)
+                patch_file(filepath, [
+                    ("find_package(Boost COMPONENTS atomic system date_time", "find_package(Boost COMPONENTS atomic date_time"),
+                    ("find_package(Boost COMPONENTS atomic system", "find_package(Boost COMPONENTS atomic")
+                ])
+
     print("Boost compatibility patching completed successfully.")
 
 if __name__ == "__main__":
