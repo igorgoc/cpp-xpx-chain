@@ -24,6 +24,11 @@ if [ ! -f "$CLANG_PATH" ]; then
     CLANG_C_PATH="$(which clang)"
 fi
 
+echo "-> Applying modern Boost compatibility adjustments across all submodules..."
+find . -type f \( -name "*.h" -o -name "*.hpp" -o -name "*.cpp" \) -not -path "*/_build/*" | while read -r file; do
+    sed -i '' 's/boost::asio::mutable_buffers_1/boost::asio::mutable_buffer/g' "$file" 2>/dev/null || true
+done
+
 mkdir -p _build && cd _build
 
 echo "-> Running CMake configuration..."
