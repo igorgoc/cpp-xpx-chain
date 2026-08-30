@@ -710,7 +710,13 @@ namespace catapult { namespace fastfinality {
 
 			auto future = fastFinalityData.startWaitForBlock();
 			auto round = fastFinalityData.round();
+			auto now = std::chrono::system_clock::now();
 			auto timeout = round.TimeSliceStart + std::chrono::milliseconds(round.TimeSliceMillis);
+			if (timeout < now) {
+				// If timeslice has already elapsed, give at least a small delay to avoid tight CPU spin
+				timeout = now + std::chrono::milliseconds(50);
+			}
+
 			try {
 				auto status = future.wait_until(timeout);
 				if (std::future_status::ready == status) {
@@ -745,6 +751,9 @@ namespace catapult { namespace fastfinality {
 				round.TimeSliceIndex++;
 				CATAPULT_LOG(debug) << "time slice index: " << round.TimeSliceIndex;
 				round.TimeSliceStart += std::chrono::milliseconds(round.TimeSliceMillis);
+				if (round.TimeSliceStart < std::chrono::system_clock::now()) {
+					round.TimeSliceStart = std::chrono::system_clock::now();
+				}
 				fastFinalityData.setRound(round);
 				fastFinalityData.setProposedBlockHash(Hash256());
 				pFsmShared->processEvent(SelectNextBlockProducer{});
