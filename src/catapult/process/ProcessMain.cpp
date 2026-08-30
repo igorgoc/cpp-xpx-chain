@@ -28,6 +28,9 @@
 #include "catapult/thread/ThreadInfo.h"
 #include "catapult/utils/ExceptionLogging.h"
 #include "catapult/version/version.h"
+#ifndef _WIN32
+#include <sys/resource.h>
+#endif
 
 namespace catapult { namespace process {
 
@@ -90,6 +93,16 @@ namespace catapult { namespace process {
 			ProcessOptions processOptions,
 			const CreateProcessHostConfig& createProcessConfig,
 			const CreateProcessHost& createProcessHost) {
+#ifndef _WIN32
+		struct rlimit rl;
+		if (getrlimit(RLIMIT_NOFILE, &rl) == 0) {
+			rl.rlim_cur = 65536;
+			if (setrlimit(RLIMIT_NOFILE, &rl) != 0) {
+				rl.rlim_cur = 10240;
+				setrlimit(RLIMIT_NOFILE, &rl);
+			}
+		}
+#endif
 		std::set_terminate(&TerminateHandler);
 		thread::SetThreadName("Process Main (" + host + ")");
 		version::WriteVersionInformation(std::cout);

@@ -89,7 +89,9 @@ namespace catapult { namespace cache {
 
 	// endregion
 
-	RocksDatabase::RocksDatabase() = default;
+	RocksDatabase::RocksDatabase()
+			: m_pWriteBatch(std::make_unique<rocksdb::WriteBatch>())
+	{}
 
 	namespace {
 		// Overload for RocksDB 9.x+ (takes std::unique_ptr<rocksdb::DB>*)
@@ -123,7 +125,8 @@ namespace catapult { namespace cache {
 
 	RocksDatabase::RocksDatabase(const RocksDatabaseSettings& settings)
 			: m_settings(settings)
-			, m_pruningFilter(m_settings.PruningMode) {
+			, m_pruningFilter(m_settings.PruningMode)
+			, m_pWriteBatch(std::make_unique<rocksdb::WriteBatch>()) {
 		if (0 == settings.ColumnFamilyNames.size())
 			CATAPULT_THROW_INVALID_ARGUMENT("no column family names specified");
 
