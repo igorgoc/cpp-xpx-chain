@@ -260,17 +260,16 @@ namespace catapult { namespace thread {
 					hardwareThreads = 4;
 
 				if (name.find("validator") != std::string::npos || name.find("proposal") != std::string::npos) {
-					// CPU-bound cryptographic verification: scale to physical hardware threads
-					numWorkerThreads = hardwareThreads;
+					// CPU-bound cryptographic verification: scale to max 4 threads on desktop
+					numWorkerThreads = std::min<size_t>(4, hardwareThreads);
 				} else if (name.find("fsm") != std::string::npos || name.find("dbrb") != std::string::npos || name.find("ptUpdater") != std::string::npos) {
 					// Sequential state machines (FSM): 1-2 dedicated threads max to eliminate lock contention
 					numWorkerThreads = std::min<size_t>(2, hardwareThreads);
 				} else if (name.find("server") != std::string::npos || name.find("packet") != std::string::npos || name.find("io") != std::string::npos) {
-					// I/O bound network packet handling: clamped to 2-4 threads
-					numWorkerThreads = std::min<size_t>(4, hardwareThreads);
+					// I/O bound network packet handling: clamped to 2 threads
+					numWorkerThreads = std::min<size_t>(2, hardwareThreads);
 				} else {
-					// Default pool concurrency: scale to physical hardware threads
-					numWorkerThreads = hardwareThreads;
+					numWorkerThreads = std::min<size_t>(2, hardwareThreads);
 				}
 			}
 

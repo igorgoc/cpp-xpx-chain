@@ -61,7 +61,6 @@ namespace catapult { namespace thread {
 			DefaultIoThreadPool(size_t numWorkerThreads, const std::string& tag)
 					: m_numConfiguredWorkerThreads(numWorkerThreads)
 					, m_tag(tag)
-					, m_ioContext(static_cast<int>(numWorkerThreads > 0 ? numWorkerThreads : 1))
 					, m_numWorkerThreads(0)
 			{}
 
