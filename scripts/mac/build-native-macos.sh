@@ -28,6 +28,12 @@ mkdir -p _build && cd _build
 
 SDK_PATH="$(xcrun --show-sdk-path 2>/dev/null || echo /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk)"
 
+CCACHE_OPTS=""
+if command -v ccache >/dev/null 2>&1; then
+    echo "-> Enabling ccache acceleration for rapid incremental rebuilds..."
+    CCACHE_OPTS="-DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache"
+fi
+
 echo "-> Running CMake configuration (SDK: $SDK_PATH)..."
 cmake \
   -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
@@ -42,13 +48,14 @@ cmake \
   -DXPX_STORAGE_SDK_NOT_BUILD_EXAMPLES=ON \
   -DCMAKE_CXX_FLAGS="-isysroot $SDK_PATH -pthread" \
   -DCMAKE_C_FLAGS="-isysroot $SDK_PATH -pthread" \
+  $CCACHE_OPTS \
   ..
 
 echo "-> Generating headers (make publish)..."
 make publish
 
 NUM_CORES=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
-echo "-> Compiling Sirius Core engine and plugins with $NUM_CORES cores..."
+echo "-> Incremental compilation of Sirius Core engine and plugins ($NUM_CORES cores)..."
 make \
   sirius.bc \
   catapult.recovery \
@@ -111,5 +118,13 @@ make \
   -j"$NUM_CORES"
 
 echo "=========================================================="
-echo " Compilation Complete! Binaries are in _build/bin/"
+echo " Incremental Build Complete! Binaries in _build/bin/"
+
+NODE_MANAGER_BIN="$DIR/../proximax-sirius-core-native/bin"
+if [ -d "$NODE_MANAGER_BIN" ]; then
+    echo "-> Auto-updating changed binaries in Node Manager ($NODE_MANAGER_BIN)..."
+    cp -u _build/bin/sirius.bc "$NODE_MANAGER_BIN/" 2>/dev/null || cp -f _build/bin/sirius.bc "$NODE_MANAGER_BIN/"
+    cp -u _build/bin/*.dylib "$NODE_MANAGER_BIN/" 2>/dev/null || cp -f _build/bin/*.dylib "$NODE_MANAGER_BIN/"
+    echo "-> Node Manager binaries synchronized successfully."
+fi
 echo "=========================================================="
