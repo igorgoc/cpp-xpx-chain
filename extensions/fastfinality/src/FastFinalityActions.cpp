@@ -711,10 +711,12 @@ namespace catapult { namespace fastfinality {
 			auto future = fastFinalityData.startWaitForBlock();
 			auto round = fastFinalityData.round();
 			auto now = std::chrono::system_clock::now();
-			auto timeout = round.TimeSliceStart + std::chrono::milliseconds(round.TimeSliceMillis);
+			auto timeSliceDuration = std::chrono::milliseconds(round.TimeSliceMillis);
+			auto timeout = round.TimeSliceStart + timeSliceDuration;
 			if (timeout < now) {
-				// If timeslice has already elapsed, give at least a small delay to avoid tight CPU spin
-				timeout = now + std::chrono::milliseconds(50);
+				round.TimeSliceStart = now;
+				fastFinalityData.setRound(round);
+				timeout = now + timeSliceDuration;
 			}
 
 			try {
