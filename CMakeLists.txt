@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.2)
+cmake_minimum_required(VERSION 3.5)
 project(catapult_server)
 include(CMakeGlobalSettings.cmake)
 option(ENABLE_CODE_COVERAGE "Enable code coverage" OFF)
@@ -31,14 +31,30 @@ set(CORE_CATAPULT_LIBS catapult.io catapult.ionet catapult.model catapult.thread
 ### setup boost
 
 if("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
-	find_package(Boost COMPONENTS atomic system date_time regex timer chrono log thread filesystem program_options random REQUIRED)
+	find_package(Boost COMPONENTS atomic date_time regex timer chrono log thread filesystem program_options random REQUIRED)
+	find_package(Boost COMPONENTS system QUIET)
 else()
-	find_package(Boost COMPONENTS atomic system date_time regex timer chrono log thread filesystem program_options random stacktrace_backtrace REQUIRED)
+	find_package(Boost COMPONENTS atomic date_time regex timer chrono log thread filesystem program_options random stacktrace_backtrace REQUIRED)
+	find_package(Boost COMPONENTS system QUIET)
 	add_definitions(-DBOOST_STACKTRACE_USE_BACKTRACE)
 	set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -DSHOW_BACKTRACE")
 endif()
 
-include_directories(SYSTEM ${Boost_INCLUDE_DIR})
+include_directories(BEFORE SYSTEM ${Boost_INCLUDE_DIR})
+
+set(CATAPULT_BOOST_LIBRARIES
+	Boost::atomic
+	Boost::date_time
+	Boost::regex
+	Boost::timer
+	Boost::chrono
+	Boost::log
+	Boost::thread
+	Boost::filesystem
+	Boost::program_options
+	Boost::random
+	${Boost_LIBRARIES}
+)
 
 ### setup openssl
 message("--- locating openssl dependencies ---")

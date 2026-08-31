@@ -32,7 +32,7 @@ namespace catapult { namespace thread {
 		class ThreadPoolContext {
 		public:
 			explicit ThreadPoolContext(boost::asio::io_context& ioContext) : m_work(boost::asio::make_work_guard(ioContext)) {
-				ioContext.reset();
+				ioContext.restart();
 			}
 
 			~ThreadPoolContext() {

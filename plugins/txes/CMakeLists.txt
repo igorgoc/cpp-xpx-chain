@@ -10,7 +10,7 @@ function(catapult_tx_plugin_src PLUGIN_BASE_NAME)
 	# create a deps lib
 	if (DEFINED PLUGIN_DEPS_FOLDERS)
 		catapult_library_target(${PLUGIN_BASE_NAME}.deps ${PLUGIN_DEPS_FOLDERS})
-		target_link_libraries(${PLUGIN_BASE_NAME}.deps ${PLUGIN_CATAPULT_LIBS})
+		target_link_libraries(${PLUGIN_BASE_NAME}.deps ${PLUGIN_CATAPULT_LIBS} ${CATAPULT_BOOST_LIBRARIES})
 	endif()
 
 	if (DEFINED PLUGIN_SDK_FOLDERS)
@@ -19,7 +19,7 @@ function(catapult_tx_plugin_src PLUGIN_BASE_NAME)
 
 	# create a plugin dll
 	catapult_shared_library_target(${PLUGIN_BASE_NAME} plugins)
-	target_link_libraries(${PLUGIN_BASE_NAME} ${PLUGIN_CATAPULT_LIBS})
+	target_link_libraries(${PLUGIN_BASE_NAME} ${PLUGIN_CATAPULT_LIBS} ${CATAPULT_BOOST_LIBRARIES})
 
 	if (DEFINED PLUGIN_DEPS_FOLDERS)
 		target_link_libraries(${PLUGIN_BASE_NAME} ${PLUGIN_BASE_NAME}.deps)

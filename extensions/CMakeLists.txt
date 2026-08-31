@@ -11,7 +11,7 @@ function(catapult_define_extension EXTENSION_NAME)
 
 
 	catapult_shared_library_target(extension.${EXTENSION_NAME})
-	target_link_libraries(extension.${EXTENSION_NAME} catapult.${EXTENSION_NAME})
+	target_link_libraries(extension.${EXTENSION_NAME} catapult.${EXTENSION_NAME} ${CATAPULT_BOOST_LIBRARIES})
 	set_property(TARGET extension.${EXTENSION_NAME} PROPERTY FOLDER "extensions")
 endfunction()
 

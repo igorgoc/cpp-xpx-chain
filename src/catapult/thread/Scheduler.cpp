@@ -82,7 +82,7 @@ namespace catapult { namespace thread {
 
 				auto nextDelay = m_task.NextDelay();
 				CATAPULT_LOG(trace) << "task '" << m_task.Name << "' will continue in " << nextDelay;
-				m_timer.expires_from_now(ToMillis(nextDelay));
+				m_timer.expires_after(ToMillis(nextDelay));
 				startWait();
 			}
 

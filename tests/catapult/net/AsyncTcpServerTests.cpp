@@ -153,7 +153,7 @@ namespace catapult { namespace net {
 
 			public:
 				void setDeadline(size_t millis) {
-					m_deadline.expires_from_now(std::chrono::milliseconds(millis));
+					m_deadline.expires_after(std::chrono::milliseconds(millis));
 					m_deadline.async_wait([pThis = shared_from_this()](const auto& ec) {
 						pThis->handleTimeout(ec);
 					});
