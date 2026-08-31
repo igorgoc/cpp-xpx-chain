@@ -26,17 +26,22 @@ fi
 
 mkdir -p _build && cd _build
 
-echo "-> Running CMake configuration..."
+SDK_PATH="$(xcrun --show-sdk-path 2>/dev/null || echo /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk)"
+
+echo "-> Running CMake configuration (SDK: $SDK_PATH)..."
 cmake \
+  -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_CXX_COMPILER="$CLANG_PATH" \
   -DCMAKE_C_COMPILER="$CLANG_C_PATH" \
+  -DCMAKE_OSX_SYSROOT="$SDK_PATH" \
   -DBOOST_ROOT="$BOOST_PREFIX" \
   -DOPENSSL_ROOT_DIR=/opt/homebrew/opt/openssl@3 \
   -DENABLE_MONGO=OFF \
   -DENABLE_ZEROMQ=OFF \
   -DXPX_STORAGE_SDK_NOT_BUILD_EXAMPLES=ON \
-  -DCMAKE_CXX_FLAGS="-pthread" \
+  -DCMAKE_CXX_FLAGS="-isysroot $SDK_PATH -pthread" \
+  -DCMAKE_C_FLAGS="-isysroot $SDK_PATH -pthread" \
   ..
 
 echo "-> Generating headers (make publish)..."
