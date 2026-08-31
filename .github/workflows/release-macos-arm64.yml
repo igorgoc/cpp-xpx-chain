@@ -29,7 +29,13 @@ jobs:
       - name: Install Build Dependencies (Homebrew)
         run: |
           brew update
-          brew install llvm@17 boost openssl@3 rocksdb zstd cmake ninja
+          brew install llvm@17 boost openssl@3 rocksdb zstd cmake ninja ccache
+
+      - name: Setup CCache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-ccache
+          max-size: 3000M
 
       - name: Configure and Compile C++ Engine
         run: |

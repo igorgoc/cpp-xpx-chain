@@ -32,12 +32,19 @@ ROCKSDB_PREFIX="${ROCKSDB_ROOT_DIR:-$(brew --prefix rocksdb 2>/dev/null || echo 
 
 mkdir -p _build && cd _build
 
+CCACHE_FLAGS=""
+if command -v ccache >/dev/null 2>&1; then
+  echo "-> CCache detected: enabling compiler cache acceleration..."
+  CCACHE_FLAGS="-DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache"
+fi
+
 echo "-> Running CMake configuration..."
 cmake \
   -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_CXX_COMPILER="$CLANG_PATH" \
   -DCMAKE_C_COMPILER="$CLANG_C_PATH" \
+  $CCACHE_FLAGS \
   -DBOOST_ROOT="$BOOST_PREFIX" \
   -DOPENSSL_ROOT_DIR="$OPENSSL_PREFIX" \
   -DROCKSDB_ROOT_DIR="$ROCKSDB_PREFIX" \
