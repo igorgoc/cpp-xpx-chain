@@ -21,6 +21,7 @@
 #include "FileBlockStorage.h"
 #include "BlockElementSerializer.h"
 #include "BlockStatementSerializer.h"
+#include "BufferInputStreamAdapter.h"
 #include "BufferedFileStream.h"
 #include "FilesystemUtils.h"
 #include "PodIoUtils.h"
@@ -33,6 +34,16 @@ namespace catapult { namespace io {
 		static constexpr uint32_t Files_Per_Directory = 65536u;
 		static constexpr auto Block_File_Extension = ".dat";
 		static constexpr auto Block_Statement_File_Extension = ".stmt";
+
+#pragma pack(push, 1)
+		struct BlockChunkIndexEntry {
+			uint32_t blockOffset;  // byte offset inside blocks.dat
+			uint32_t blockSize;    // byte length of block element
+			uint32_t stmtOffset;   // byte offset inside statements.dat
+			uint32_t stmtSize;     // byte length of statement (0 if none)
+		};
+#pragma pack(pop)
+		static_assert(sizeof(BlockChunkIndexEntry) == 16, "BlockChunkIndexEntry must be exactly 16 bytes");
 
 		// region path utils
 
@@ -50,6 +61,24 @@ namespace catapult { namespace io {
 			if (!boost::filesystem::exists(path))
 				boost::filesystem::create_directory(path);
 
+			return path;
+		}
+
+		boost::filesystem::path GetBlocksDatPath(const std::string& baseDirectory, Height height) {
+			auto path = GetDirectoryPath(baseDirectory, height);
+			path /= "blocks.dat";
+			return path;
+		}
+
+		boost::filesystem::path GetStatementsDatPath(const std::string& baseDirectory, Height height) {
+			auto path = GetDirectoryPath(baseDirectory, height);
+			path /= "statements.dat";
+			return path;
+		}
+
+		boost::filesystem::path GetBlocksIdxPath(const std::string& baseDirectory, Height height) {
+			auto path = GetDirectoryPath(baseDirectory, height);
+			path /= "blocks.idx";
 			return path;
 		}
 
@@ -88,6 +117,27 @@ namespace catapult { namespace io {
 		auto OpenBlockStatementFile(const std::string& baseDirectory, Height height, OpenMode mode = OpenMode::Read_Only) {
 			auto blockStatementPath = GetBlockStatementPath(baseDirectory, height);
 			return RawFile(blockStatementPath.generic_string().c_str(), mode);
+		}
+
+		bool HasChunkIndexEntry(const std::string& baseDirectory, Height height, BlockChunkIndexEntry& entry) {
+			auto idxPath = GetBlocksIdxPath(baseDirectory, height);
+			if (!IsRegularFile(idxPath))
+				return false;
+
+			auto index = height.unwrap() % Files_Per_Directory;
+			auto requiredSize = (index + 1) * sizeof(BlockChunkIndexEntry);
+
+			try {
+				RawFile idxFile(idxPath.generic_string().c_str(), OpenMode::Read_Only, LockMode::None);
+				if (idxFile.size() < requiredSize)
+					return false;
+
+				idxFile.seek(index * sizeof(BlockChunkIndexEntry));
+				idxFile.read(MutableRawBuffer(reinterpret_cast<uint8_t*>(&entry), sizeof(BlockChunkIndexEntry)));
+				return entry.blockSize > 0;
+			} catch (...) {
+				return false;
+			}
 		}
 
 		// endregion
@@ -156,22 +206,14 @@ namespace catapult { namespace io {
 
 	// endregion
 
-	// region ctor
+	// region FileBlockStorage::ChunkWriter
 
-	FileBlockStorage::FileBlockStorage(const std::string& dataDirectory, FileBlockStorageMode mode)
+	FileBlockStorage::ChunkWriter::ChunkWriter(const std::string& dataDirectory)
 			: m_dataDirectory(dataDirectory)
-			, m_mode(mode)
-			, m_hashFile(m_dataDirectory)
-			, m_indexFile((boost::filesystem::path(m_dataDirectory) / "index.dat").generic_string())
+			, m_cachedDirectoryId(Unset_Directory_Id)
 	{}
 
-	// endregion
-
-	// region LightBlockStorage
-
 	namespace {
-		// use RawFile adapter instead of BufferedFileStream because everything read/written is in consecutive memory,
-		// so there's no benefit to buffering
 		class RawFileOutputStreamAdapter : public OutputStream {
 		public:
 			explicit RawFileOutputStreamAdapter(RawFile& rawFile) : m_rawFile(rawFile)
@@ -190,6 +232,99 @@ namespace catapult { namespace io {
 			RawFile& m_rawFile;
 		};
 	}
+
+	void FileBlockStorage::ChunkWriter::save(Height height, const model::BlockElement& blockElement) {
+		auto currentId = height.unwrap() / Files_Per_Directory;
+		if (m_cachedDirectoryId != currentId || !m_pCachedBlocksFile) {
+			reset();
+			auto blocksDatPath = GetBlocksDatPath(m_dataDirectory, height);
+			m_pCachedBlocksFile = std::make_unique<RawFile>(blocksDatPath.generic_string().c_str(), OpenMode::Read_Append, LockMode::None);
+
+			auto stmtDatPath = GetStatementsDatPath(m_dataDirectory, height);
+			m_pCachedStmtFile = std::make_unique<RawFile>(stmtDatPath.generic_string().c_str(), OpenMode::Read_Append, LockMode::None);
+
+			auto idxPath = GetBlocksIdxPath(m_dataDirectory, height);
+			m_pCachedIdxFile = std::make_unique<RawFile>(idxPath.generic_string().c_str(), OpenMode::Read_Append, LockMode::None);
+
+			m_cachedDirectoryId = currentId;
+		}
+
+		BlockChunkIndexEntry entry{ 0, 0, 0, 0 };
+
+		// 1. Append block element payload into chunked blocks.dat
+		{
+			auto blockOffset = m_pCachedBlocksFile->size();
+			if (blockOffset > std::numeric_limits<uint32_t>::max())
+				CATAPULT_THROW_RUNTIME_ERROR_1("blocks.dat exceeded 4GB for directory at height", height);
+
+			entry.blockOffset = static_cast<uint32_t>(blockOffset);
+
+			m_pCachedBlocksFile->seek(blockOffset);
+			RawFileOutputStreamAdapter streamAdapter(*m_pCachedBlocksFile);
+			WriteBlockElement(streamAdapter, blockElement);
+
+			auto blockSize = m_pCachedBlocksFile->size() - blockOffset;
+			if (blockSize > std::numeric_limits<uint32_t>::max())
+				CATAPULT_THROW_RUNTIME_ERROR_1("block size exceeded 4GB at height", height);
+
+			entry.blockSize = static_cast<uint32_t>(blockSize);
+		}
+
+		// 2. Append optional statement payload into chunked statements.dat
+		if (blockElement.OptionalStatement) {
+			auto stmtOffset = m_pCachedStmtFile->size();
+			if (stmtOffset > std::numeric_limits<uint32_t>::max())
+				CATAPULT_THROW_RUNTIME_ERROR_1("statements.dat exceeded 4GB for directory at height", height);
+
+			entry.stmtOffset = static_cast<uint32_t>(stmtOffset);
+
+			m_pCachedStmtFile->seek(stmtOffset);
+			RawFileOutputStreamAdapter streamAdapter(*m_pCachedStmtFile);
+			WriteBlockStatement(streamAdapter, *blockElement.OptionalStatement);
+
+			auto stmtSize = m_pCachedStmtFile->size() - stmtOffset;
+			if (stmtSize > std::numeric_limits<uint32_t>::max())
+				CATAPULT_THROW_RUNTIME_ERROR_1("statement size exceeded 4GB at height", height);
+
+			entry.stmtSize = static_cast<uint32_t>(stmtSize);
+		}
+
+		// 3. Write index entry into blocks.idx
+		{
+			auto index = height.unwrap() % Files_Per_Directory;
+			auto targetOffset = index * sizeof(BlockChunkIndexEntry);
+			if (m_pCachedIdxFile->size() < targetOffset) {
+				std::vector<uint8_t> zeros(targetOffset - m_pCachedIdxFile->size(), 0);
+				m_pCachedIdxFile->seek(m_pCachedIdxFile->size());
+				m_pCachedIdxFile->write(zeros);
+			}
+			m_pCachedIdxFile->seek(targetOffset);
+			m_pCachedIdxFile->write(RawBuffer(reinterpret_cast<const uint8_t*>(&entry), sizeof(BlockChunkIndexEntry)));
+		}
+	}
+
+	void FileBlockStorage::ChunkWriter::reset() {
+		m_cachedDirectoryId = Unset_Directory_Id;
+		m_pCachedBlocksFile.reset();
+		m_pCachedStmtFile.reset();
+		m_pCachedIdxFile.reset();
+	}
+
+	// endregion
+
+	// region ctor
+
+	FileBlockStorage::FileBlockStorage(const std::string& dataDirectory, FileBlockStorageMode mode)
+			: m_dataDirectory(dataDirectory)
+			, m_mode(mode)
+			, m_hashFile(m_dataDirectory)
+			, m_chunkWriter(m_dataDirectory)
+			, m_indexFile((boost::filesystem::path(m_dataDirectory) / "index.dat").generic_string())
+	{}
+
+	// endregion
+
+	// region LightBlockStorage
 
 	Height FileBlockStorage::chainHeight() const {
 		return m_indexFile.exists() ? Height(m_indexFile.get()) : Height(0);
@@ -218,19 +353,7 @@ namespace catapult { namespace io {
 			CATAPULT_THROW_INVALID_ARGUMENT(out.str().c_str());
 		}
 
-		{
-			// write element
-			auto pBlockFile = OpenBlockFile(m_dataDirectory, height, OpenMode::Read_Write);
-			RawFileOutputStreamAdapter streamAdapter(*pBlockFile);
-			WriteBlockElement(streamAdapter, blockElement);
-
-			// write statements
-			if (blockElement.OptionalStatement) {
-				BufferedOutputFileStream blockStatementOutputStream(OpenBlockStatementFile(m_dataDirectory, height, OpenMode::Read_Write));
-				WriteBlockStatement(blockStatementOutputStream, *blockElement.OptionalStatement);
-				blockStatementOutputStream.flush();
-			}
-		}
+		m_chunkWriter.save(height, blockElement);
 
 		if (FileBlockStorageMode::Hash_Index == m_mode)
 			m_hashFile.save(height, blockElement.EntityHash);
@@ -240,7 +363,40 @@ namespace catapult { namespace io {
 	}
 
 	void FileBlockStorage::dropBlocksAfter(Height height) {
+		m_hashFile.reset();
+		m_chunkWriter.reset();
 		m_indexFile.set(height.unwrap());
+
+		if (Height(0) == height)
+			return;
+
+		auto nextHeight = height + Height(1);
+		BlockChunkIndexEntry nextEntry;
+		if (HasChunkIndexEntry(m_dataDirectory, nextHeight, nextEntry)) {
+			boost::system::error_code ec;
+
+			auto blocksDatPath = GetBlocksDatPath(m_dataDirectory, nextHeight);
+			if (boost::filesystem::is_regular_file(blocksDatPath))
+				boost::filesystem::resize_file(blocksDatPath, nextEntry.blockOffset, ec);
+
+			auto stmtDatPath = GetStatementsDatPath(m_dataDirectory, nextHeight);
+			if (boost::filesystem::is_regular_file(stmtDatPath))
+				boost::filesystem::resize_file(stmtDatPath, nextEntry.stmtOffset, ec);
+
+			auto idxPath = GetBlocksIdxPath(m_dataDirectory, nextHeight);
+			if (boost::filesystem::is_regular_file(idxPath)) {
+				auto nextIndex = nextHeight.unwrap() % Files_Per_Directory;
+				auto targetOffset = nextIndex * sizeof(BlockChunkIndexEntry);
+				try {
+					RawFile idxFile(idxPath.generic_string().c_str(), OpenMode::Read_Append, LockMode::None);
+					if (idxFile.size() > targetOffset) {
+						std::vector<uint8_t> zeros(idxFile.size() - targetOffset, 0);
+						idxFile.seek(targetOffset);
+						idxFile.write(zeros);
+					}
+				} catch (...) {}
+			}
+		}
 	}
 
 	// endregion
@@ -278,24 +434,97 @@ namespace catapult { namespace io {
 
 	std::shared_ptr<const model::Block> FileBlockStorage::loadBlock(Height height) const {
 		requireHeight(height, "block");
-		auto pBlockFile = OpenBlockFile(m_dataDirectory, height);
-		return ReadBlock(*pBlockFile);
+
+		BlockChunkIndexEntry entry;
+		if (HasChunkIndexEntry(m_dataDirectory, height, entry)) {
+			auto blocksDatPath = GetBlocksDatPath(m_dataDirectory, height);
+			RawFile blocksFile(blocksDatPath.generic_string().c_str(), OpenMode::Read_Only, LockMode::None);
+			blocksFile.seek(entry.blockOffset);
+
+			auto size = Read32(blocksFile);
+			blocksFile.seek(entry.blockOffset);
+
+			auto pBlock = utils::MakeSharedWithSize<model::Block>(size);
+			blocksFile.read({ reinterpret_cast<uint8_t*>(pBlock.get()), size });
+			return pBlock;
+		}
+
+		// Fallback for legacy single-file storage (e.g. genesis / seed nemesis)
+		auto blockPath = GetBlockPath(m_dataDirectory, height, Block_File_Extension);
+		if (IsRegularFile(blockPath)) {
+			auto pBlockFile = OpenBlockFile(m_dataDirectory, height);
+			return ReadBlock(*pBlockFile);
+		}
+
+		CATAPULT_THROW_RUNTIME_ERROR_1("block not found at height", height);
 	}
 
 	std::shared_ptr<const model::BlockElement> FileBlockStorage::loadBlockElement(Height height) const {
 		requireHeight(height, "block element");
-		auto pBlockFile = OpenBlockFile(m_dataDirectory, height);
-		RawFileInputStreamAdapter streamAdapter(*pBlockFile);
-		auto pBlockElement = ReadBlockElement(streamAdapter);
 
-		if (pBlockFile->position() != pBlockFile->size())
-			CATAPULT_THROW_RUNTIME_ERROR_1("additional data after block at height", height);
+		BlockChunkIndexEntry entry;
+		if (HasChunkIndexEntry(m_dataDirectory, height, entry)) {
+			auto blocksDatPath = GetBlocksDatPath(m_dataDirectory, height);
+			RawFile blocksFile(blocksDatPath.generic_string().c_str(), OpenMode::Read_Only, LockMode::None);
+			blocksFile.seek(entry.blockOffset);
 
-		return std::move(pBlockElement);
+			std::vector<uint8_t> blockBuffer(entry.blockSize);
+			blocksFile.read(blockBuffer);
+
+			BufferInputStreamAdapter streamAdapter(blockBuffer);
+			auto pBlockElement = ReadBlockElement(streamAdapter);
+
+			if (entry.stmtSize > 0) {
+				auto stmtDatPath = GetStatementsDatPath(m_dataDirectory, height);
+				RawFile stmtFile(stmtDatPath.generic_string().c_str(), OpenMode::Read_Only, LockMode::None);
+				stmtFile.seek(entry.stmtOffset);
+
+				std::vector<uint8_t> stmtBuffer(entry.stmtSize);
+				stmtFile.read(stmtBuffer);
+
+				BufferInputStreamAdapter stmtStream(stmtBuffer);
+				auto pBlockStatement = std::make_shared<model::BlockStatement>();
+				ReadBlockStatement(stmtStream, *pBlockStatement);
+				const_cast<model::BlockElement&>(*pBlockElement).OptionalStatement = std::move(pBlockStatement);
+			}
+
+			return std::move(pBlockElement);
+		}
+
+		// Fallback for legacy single-file storage (e.g. genesis / seed nemesis)
+		auto blockPath = GetBlockPath(m_dataDirectory, height, Block_File_Extension);
+		if (IsRegularFile(blockPath)) {
+			auto pBlockFile = OpenBlockFile(m_dataDirectory, height);
+			RawFileInputStreamAdapter streamAdapter(*pBlockFile);
+			auto pBlockElement = ReadBlockElement(streamAdapter);
+
+			if (pBlockFile->position() != pBlockFile->size())
+				CATAPULT_THROW_RUNTIME_ERROR_1("additional data after block at height", height);
+
+			return std::move(pBlockElement);
+		}
+
+		CATAPULT_THROW_RUNTIME_ERROR_1("block element not found at height", height);
 	}
 
 	std::pair<std::vector<uint8_t>, bool> FileBlockStorage::loadBlockStatementData(Height height) const {
 		requireHeight(height, "block statement data");
+
+		BlockChunkIndexEntry entry;
+		if (HasChunkIndexEntry(m_dataDirectory, height, entry)) {
+			if (entry.stmtSize == 0)
+				return std::make_pair(std::vector<uint8_t>(), false);
+
+			auto stmtDatPath = GetStatementsDatPath(m_dataDirectory, height);
+			RawFile stmtFile(stmtDatPath.generic_string().c_str(), OpenMode::Read_Only, LockMode::None);
+			stmtFile.seek(entry.stmtOffset);
+
+			std::vector<uint8_t> blockStatement(entry.stmtSize);
+			stmtFile.read(blockStatement);
+			return std::make_pair(std::move(blockStatement), true);
+		}
+
+		// Fallback for legacy single-file storage
 		auto path = GetBlockStatementPath(m_dataDirectory, height);
 		if (!IsRegularFile(path))
 			return std::make_pair(std::vector<uint8_t>(), false);
@@ -314,6 +543,7 @@ namespace catapult { namespace io {
 	void FileBlockStorage::purge() {
 		// remove everything under the directory
 		m_hashFile.reset();
+		m_chunkWriter.reset();
 		PurgeDirectory(m_dataDirectory);
 	}
 

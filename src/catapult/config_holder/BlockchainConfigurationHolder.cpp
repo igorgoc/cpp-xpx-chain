@@ -96,6 +96,16 @@ namespace catapult { namespace config {
 
 	}
 
+	void BlockchainConfigurationHolder::SetPluginInitializer(PluginInitializer&& initializer) {
+		std::unique_lock lock(m_mutex);
+		m_pluginInitializer = std::move(initializer);
+		if (m_pluginInitializer) {
+			for (auto& [_, config] : m_configs) {
+				m_pluginInitializer(const_cast<model::NetworkConfiguration&>(config.Network));
+			}
+		}
+	}
+
 	void BlockchainConfigurationHolder::InitializeNetworkConfiguration(const model::NetworkConfiguration& networkConfiguration) {
 		if(m_configs.empty() || m_configs.size() > 1)
 			CATAPULT_THROW_RUNTIME_ERROR("Attempting to initialize configuration holder base config, but it's empty or has been initialized already.")
@@ -113,6 +123,9 @@ namespace catapult { namespace config {
 			Height(0),
 			nullptr
 		);
+		if (m_pluginInitializer)
+			m_pluginInitializer(const_cast<model::NetworkConfiguration&>(config.Network));
+
 		m_configs.erase(Height(0));
 		m_configs.insert({ Height(0), config });
 	}
@@ -123,7 +136,8 @@ namespace catapult { namespace config {
 		try {
 			std::istringstream inputBlock(strConfig);
 			auto networkConfig = model::NetworkConfiguration::LoadFromBag(utils::ConfigurationBag::FromStream(inputBlock));
-			m_pluginInitializer(networkConfig);
+			if (m_pluginInitializer)
+				m_pluginInitializer(networkConfig);
 
 			std::istringstream inputVersions(supportedVersion);
 			config::SupportedEntityVersions supportedEntityVersions;
@@ -137,6 +151,10 @@ namespace catapult { namespace config {
 	}
 
 	void BlockchainConfigurationHolder::InsertConfig(const Height& height, const model::NetworkConfiguration& networkConfig, const config::SupportedEntityVersions& supportedEntities) {
+		if (m_configs.empty() || m_configs.find(Height(0)) == m_configs.end()) {
+			CATAPULT_LOG(warning) << "Cannot insert config at height " << height << " because base config Height(0) is not initialized";
+			return;
+		}
 		const auto& baseConfig = m_configs.at(Height(0));
 		auto config = BlockchainConfiguration(
 				baseConfig.Immutable,
@@ -150,6 +168,8 @@ namespace catapult { namespace config {
 				height,
 				LastConfigOrNull(height-Height(1))
 		);
+		if (m_pluginInitializer)
+			m_pluginInitializer(const_cast<model::NetworkConfiguration&>(config.Network));
 
 		m_configs.erase(height);
 		m_configs.insert({ height, config });

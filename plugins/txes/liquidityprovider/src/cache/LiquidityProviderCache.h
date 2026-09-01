@@ -37,7 +37,8 @@ namespace catapult { namespace cache {
 		}
 
 		void commit(const CacheDeltaType& delta) {
-			delta.updateKeyCollector(m_pKeyCollector);
+			if (m_pKeyCollector)
+				delta.updateKeyCollector(m_pKeyCollector);
 			LiquidityProviderBasicCache::commit(delta);
 		}
 

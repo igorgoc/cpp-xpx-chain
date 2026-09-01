@@ -293,9 +293,8 @@ namespace catapult { namespace chain {
 				hit = 1u;
 			if (config.EnableEqualWeights) {
 				auto nextHeight = pLastBlockElement->Block.Height + Height(1);
-				if (nextHeight <= accountData.LastSigningBlockHeight)
-					CATAPULT_THROW_INVALID_ARGUMENT_2("invalid last signing block height", key, accountData.LastSigningBlockHeight)
-				weight *= static_cast<double>((nextHeight - accountData.LastSigningBlockHeight).unwrap());
+				auto heightDelta = nextHeight > accountData.LastSigningBlockHeight ? (nextHeight - accountData.LastSigningBlockHeight).unwrap() : 1ULL;
+				weight *= static_cast<double>(heightDelta);
 			}
 			auto stake = static_cast<double>(accountData.EffectiveBalance.unwrap()) / static_cast<double>(hit);
 			auto fRate = stake * weight;

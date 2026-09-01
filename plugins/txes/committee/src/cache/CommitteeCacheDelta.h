@@ -98,11 +98,15 @@ namespace catapult { namespace cache {
 
 		void updateAccountCollector(const std::shared_ptr<CommitteeAccountCollector>& pAccountCollector) const {
 			pAccountCollector->clear();
-			const auto& config = pluginConfig();
-			for (const auto& key : keys()) {
-				auto iter = m_pCommitteeEntries->find(key);
-				auto pEntry = iter.get();
-				pAccountCollector->addAccount(*pEntry, config);
+			try {
+				const auto& config = pluginConfig();
+				for (const auto& key : keys()) {
+					auto iter = m_pCommitteeEntries->find(key);
+					if (auto pEntry = iter.get())
+						pAccountCollector->addAccount(*pEntry, config);
+				}
+			} catch (const catapult_invalid_argument&) {
+				// Plugin configuration not yet initialized during intermediate cache boot phase
 			}
 		}
 

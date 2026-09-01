@@ -102,8 +102,9 @@ namespace catapult { namespace cache {
 					removed.erase(height);
 				} else {
 					auto iter = m_pNetworkConfigEntries->find(height);
-					auto entry = iter.get();
-					pConfigHolder->InsertConfig(height, entry->networkConfig(), entry->supportedEntityVersions());
+					if (auto entry = iter.get()) {
+						pConfigHolder->InsertConfig(height, entry->networkConfig(), entry->supportedEntityVersions());
+					}
 				}
 			}
 

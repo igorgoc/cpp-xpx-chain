@@ -44,11 +44,17 @@ namespace catapult { namespace cache {
 	}
 
 	void BasicBlockDifficultyCacheDelta::insert(const ValueType& info) {
+		if (!m_pOrderedDelta->empty() && info.BlockHeight < nextHeight()) {
+			m_pOrderedDelta->remove(info);
+		}
 		checkInsert(info.BlockHeight);
 		m_pOrderedDelta->insert(info);
 	}
 
 	void BasicBlockDifficultyCacheDelta::insert(Height height, Timestamp timestamp, Difficulty difficulty) {
+		if (!m_pOrderedDelta->empty() && height < nextHeight()) {
+			m_pOrderedDelta->remove(ValueType(height));
+		}
 		checkInsert(height);
 		m_pOrderedDelta->emplace(height, timestamp, difficulty);
 	}
@@ -90,7 +96,7 @@ namespace catapult { namespace cache {
 			return;
 		}
 
-		if (nextHeight() != height)
+		if (nextHeight() != height && nextHeight() < height)
 			ThrowInvalidHeightError("insert", nextHeight(), height);
 	}
 

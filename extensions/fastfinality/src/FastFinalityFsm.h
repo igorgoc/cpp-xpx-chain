@@ -94,8 +94,6 @@ namespace catapult { namespace fastfinality {
 			resetFastFinalityData();
 			m_timer.cancel();
 			processEvent(Stop{});
-			m_actions = FastFinalityActions{};
-			m_pPool.reset();
 			m_dbrbProcess.shutdown();
 		}
 

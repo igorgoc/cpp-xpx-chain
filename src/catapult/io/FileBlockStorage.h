@@ -77,10 +77,28 @@ namespace catapult { namespace io {
 			std::unique_ptr<RawFile> m_pCachedHashFile;
 		};
 
+		class ChunkWriter final {
+		public:
+			explicit ChunkWriter(const std::string& dataDirectory);
+
+			void save(Height height, const model::BlockElement& blockElement);
+			void reset();
+
+		private:
+			const std::string& m_dataDirectory;
+
+			// used for caching active chunk file handles
+			uint64_t m_cachedDirectoryId;
+			std::unique_ptr<RawFile> m_pCachedBlocksFile;
+			std::unique_ptr<RawFile> m_pCachedStmtFile;
+			std::unique_ptr<RawFile> m_pCachedIdxFile;
+		};
+
 		std::string m_dataDirectory;
 		FileBlockStorageMode m_mode;
 
 		HashFile m_hashFile;
+		ChunkWriter m_chunkWriter;
 		IndexFile m_indexFile;
 	};
 }}

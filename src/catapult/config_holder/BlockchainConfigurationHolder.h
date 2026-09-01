@@ -48,9 +48,7 @@ namespace catapult { namespace config {
 		}
 
 		void InitializeNetworkConfiguration(const model::NetworkConfiguration& networkConfiguration);
-		void SetPluginInitializer(PluginInitializer&& initializer) {
-			m_pluginInitializer = std::move(initializer);
-		}
+		void SetPluginInitializer(PluginInitializer&& initializer);
 
 		void InsertConfig(const Height& height, const std::string& strConfig, const std::string& supportedVersion);
 

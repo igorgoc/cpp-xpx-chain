@@ -20,6 +20,7 @@
 
 #include "HostUtils.h"
 #include "catapult/extensions/ProcessBootstrapper.h"
+#include "catapult/io/IndexFile.h"
 #include "catapult/plugins/PluginLoader.h"
 
 namespace catapult { namespace local {
@@ -77,6 +78,16 @@ namespace catapult { namespace local {
 	bool IsStatePresent(const config::CatapultDataDirectory& dataDirectory) {
 		if (extensions::HasSerializedState(dataDirectory.dir("state")))
 			return false;
+
+		auto indexPath = dataDirectory.rootDir().file("index.dat");
+		if (boost::filesystem::exists(indexPath)) {
+			try {
+				io::IndexFile indexFile(indexPath);
+				if (indexFile.get() > 1)
+					return false;
+			} catch (...) {}
+		}
+
 		return true;
 	}
 

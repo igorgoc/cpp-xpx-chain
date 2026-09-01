@@ -242,7 +242,7 @@ namespace catapult { namespace model {
 			if (T::Id >= m_pluginConfigs.size() || !m_pluginConfigs[T::Id])
 				CATAPULT_THROW_AND_LOG_1(catapult_invalid_argument, "plugin configuration not found", std::string(T::Name));
 
-			return *dynamic_cast<const T*>(m_pluginConfigs[T::Id].get());
+			return *static_cast<const T*>(m_pluginConfigs[T::Id].get());
 		}
 
 		/// Removes all plugin configs.

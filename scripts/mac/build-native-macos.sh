@@ -123,8 +123,9 @@ echo " Incremental Build Complete! Binaries in _build/bin/"
 NODE_MANAGER_BIN="$DIR/../proximax-sirius-core-native/bin"
 if [ -d "$NODE_MANAGER_BIN" ]; then
     echo "-> Auto-updating changed binaries in Node Manager ($NODE_MANAGER_BIN)..."
-    cp -u _build/bin/sirius.bc "$NODE_MANAGER_BIN/" 2>/dev/null || cp -f _build/bin/sirius.bc "$NODE_MANAGER_BIN/"
-    cp -u _build/bin/*.dylib "$NODE_MANAGER_BIN/" 2>/dev/null || cp -f _build/bin/*.dylib "$NODE_MANAGER_BIN/"
+    cp -f bin/sirius.bc "$NODE_MANAGER_BIN/"
+    cp -f bin/catapult.recovery "$NODE_MANAGER_BIN/" 2>/dev/null || true
+    cp -f bin/*.dylib "$NODE_MANAGER_BIN/"
     echo "-> Node Manager binaries synchronized successfully."
 fi
 echo "=========================================================="

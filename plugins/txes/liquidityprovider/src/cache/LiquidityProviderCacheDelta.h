@@ -98,11 +98,13 @@ namespace catapult { namespace cache {
 		}
 
 		void updateKeyCollector(const std::shared_ptr<LiquidityProviderKeyCollector>& pKeyCollector) const {
+			if (!pKeyCollector)
+				return;
 			pKeyCollector->keys().clear();
 			for (const auto& key : keys()) {
 				auto iter = m_pLiquidityProviderEntries->find(key);
-				auto pEntry = iter.get();
-				pKeyCollector->addKey(*pEntry);
+				if (auto pEntry = iter.get())
+					pKeyCollector->addKey(*pEntry);
 			}
 		}
 

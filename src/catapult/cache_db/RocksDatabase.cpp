@@ -245,7 +245,7 @@ namespace catapult { namespace cache {
 			return;
 
 		rocksdb::WriteOptions writeOptions;
-		writeOptions.sync = true;
+		writeOptions.sync = false;
 
 		auto directory = m_settings.DatabaseDirectory + "/";
 		utils::SlowOperationLogger logger(utils::ExtractDirectoryName(directory.c_str()).pData, utils::LogLevel::Warning);

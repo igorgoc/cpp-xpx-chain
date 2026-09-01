@@ -67,6 +67,7 @@ namespace catapult { namespace local {
 					, m_dataDirectory(config::CatapultDataDirectoryPreparer::Prepare(m_pBootstrapper->config().User.DataDirectory))
 					, m_nodes(m_pBootstrapper->config().Node.MaxTrackedNodes, m_pBootstrapper->extensionManager().networkTimeSupplier())
 					, m_cacheHolder(m_pBootstrapper->cacheHolder()) // note that sub caches are added in boot
+					, m_pBlockChangeSubscriber(nullptr)
 					, m_storage(
 							m_pBootstrapper->subscriptionManager().createBlockStorage(m_pBlockChangeSubscriber),
 							CreateStagingBlockStorage(m_dataDirectory))
@@ -115,11 +116,13 @@ namespace catapult { namespace local {
 						CATAPULT_LOG(debug) << "loading network configuration from dump";
 						auto config = extensions::LoadActiveNetworkConfig(stateDir);
 						m_pBootstrapper->configHolder()->InitializeNetworkConfiguration(config);
+						pConfigHolder->SetPluginInitializer(m_pluginManager.createPluginInitializer());
 					} else {
 						/// Load the configuration from the cache.
 						CATAPULT_LOG(debug) << "loading network configuration from cache";
 						m_cacheHolder.cache() = m_pluginManager.createCache();
 						pConfigHolder->SetCache(&m_cacheHolder.cache());
+						pConfigHolder->SetPluginInitializer(m_pluginManager.createPluginInitializer());
 
 						loadStateFromDisk();
 
