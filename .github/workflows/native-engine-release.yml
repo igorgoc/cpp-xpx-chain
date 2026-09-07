@@ -1,0 +1,246 @@
+name: Native Engine Release
+
+on:
+  push:
+    branches:
+      - 'feature/reducedDataSize'
+      - 'legacy/native-storage-macos-arm64'
+    tags:
+      - 'v*-arm64*'
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag (e.g. v1.9.7-arm64)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos-arm64:
+    name: Build Native Engine (macOS ARM64)
+    runs-on: macos-14
+    steps:
+      - name: Checkout repository (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+          fetch-depth: 0
+
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-ccache-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-ccache-
+          max-size: 2G
+
+      - name: Install Base Build Utilities (NO Boost, NO RocksDB)
+        run: |
+          echo "-> Installing system utilities via Homebrew..."
+          brew install llvm@17 ninja openssl@3
+          if brew list --versions boost >/dev/null 2>&1; then
+            echo "::warning::Detected Homebrew Boost installed as transient dependency, unlinking..."
+            brew unlink boost || true
+          fi
+          if brew list --versions rocksdb >/dev/null 2>&1; then
+            echo "::warning::Detected Homebrew RocksDB installed as transient dependency, unlinking..."
+            brew unlink rocksdb || true
+          fi
+
+      - name: Download & Restore Verified Pinned Toolchain (Boost 1.81.0 + RocksDB 8.5.3)
+        run: |
+          echo "-> Downloading verified pinned toolchain from release toolchain-v1..."
+          curl -sSL -o /tmp/toolchain.tar.gz \
+            https://github.com/igorgoc/cpp-xpx-chain/releases/download/toolchain-v1/sirius-macos-arm64-toolchain-boost181-rocksdb853.tar.gz
+
+          EXPECTED_HASH="22648fc6001e8478cf51b37799226816faabe9286848b7698894c7d3385e0306"
+          ACTUAL_HASH="$(shasum -a 256 /tmp/toolchain.tar.gz | awk '{print $1}')"
+          echo "Expected Hash: $EXPECTED_HASH"
+          echo "Actual Hash:   $ACTUAL_HASH"
+          if [ "$ACTUAL_HASH" != "$EXPECTED_HASH" ]; then
+            echo "::error::CRITICAL: Toolchain checksum mismatch!"
+            exit 1
+          fi
+          echo "✓ Checksum validated."
+
+          echo "-> Unpacking Boost 1.81.0 to $HOME/boost-build-1.81.0..."
+          tar -xzf /tmp/toolchain.tar.gz -C "$HOME" boost-build-1.81.0
+
+          echo "-> Unpacking RocksDB 8.5.3 into /usr/local..."
+          sudo mkdir -p /usr/local/lib /usr/local/include
+          sudo tar -xzf /tmp/toolchain.tar.gz -C /usr/local lib include
+          ls -la /usr/local/lib/*rocksdb*
+
+      - name: Configure CMake with Clang 17 and Pinned Toolchain
+        run: |
+          SDK_PATH="$(xcrun --show-sdk-path)"
+          CLANG_CXX="/opt/homebrew/opt/llvm@17/bin/clang++"
+          CLANG_C="/opt/homebrew/opt/llvm@17/bin/clang"
+
+          echo "-> Configuring CMake with LLVM 17 and Boost 1.81.0..."
+          mkdir -p _build && cd _build
+          cmake \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER="$CLANG_CXX" \
+            -DCMAKE_C_COMPILER="$CLANG_C" \
+            -DCMAKE_OSX_SYSROOT="$SDK_PATH" \
+            -DBOOST_ROOT="$HOME/boost-build-1.81.0" \
+            -DOPENSSL_ROOT_DIR=/opt/homebrew/opt/openssl@3 \
+            -DENABLE_MONGO=OFF \
+            -DENABLE_ZEROMQ=OFF \
+            -DXPX_STORAGE_SDK_NOT_BUILD_EXAMPLES=ON \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_FLAGS="-isysroot $SDK_PATH -pthread" \
+            -DCMAKE_C_FLAGS="-isysroot $SDK_PATH -pthread" \
+            ..
+
+      - name: Build Sirius Core Engine & All Plugins
+        run: |
+          cd _build
+          echo "-> Running make publish..."
+          make publish
+
+          CORES=$(sysctl -n hw.ncpu)
+          echo "-> Compiling core engine and plugins with $CORES jobs..."
+          make -j"$CORES" \
+            sirius.bc \
+            catapult.recovery \
+            catapult.plugins.accountlink \
+            catapult.plugins.aggregate \
+            catapult.plugins.committee \
+            catapult.plugins.config \
+            catapult.plugins.contract \
+            catapult.plugins.dbrb \
+            catapult.plugins.exchange \
+            catapult.plugins.exchangesda \
+            catapult.plugins.hashcache \
+            catapult.plugins.hashcache.cache \
+            catapult.plugins.liquidityprovider \
+            catapult.plugins.lockhash \
+            catapult.plugins.locksecret \
+            catapult.plugins.metadata \
+            catapult.plugins.metadata_v2 \
+            catapult.plugins.mosaic \
+            catapult.plugins.multisig \
+            catapult.plugins.namespace \
+            catapult.plugins.operation \
+            catapult.plugins.property \
+            catapult.plugins.service \
+            catapult.plugins.signature \
+            catapult.plugins.storage \
+            catapult.plugins.streaming \
+            catapult.plugins.supercontract \
+            catapult.plugins.transfer \
+            catapult.plugins.upgrade \
+            extension.addressextraction \
+            extension.diagnostics \
+            extension.eventsource \
+            extension.fastfinality \
+            extension.filespooling \
+            extension.harvesting \
+            extension.hashcache \
+            extension.networkheight \
+            extension.nodediscovery \
+            extension.packetserver \
+            extension.partialtransaction \
+            extension.pluginhandlers \
+            extension.storage \
+            extension.sync \
+            extension.syncsource \
+            extension.timesync \
+            extension.transactionsink \
+            extension.unbondedpruning \
+            torrent-sirius \
+            api \
+            connection \
+            drive \
+            ionet \
+            model \
+            net \
+            nodediscovery \
+            sdk_external \
+            storage-crypto \
+            utils
+
+      - name: Assemble & Self-Contain Standalone Distribution
+        run: |
+          mkdir -p staging/bin dist
+
+          echo "-> Staging build outputs..."
+          cp _build/bin/sirius.bc staging/bin/
+          cp _build/bin/catapult.recovery staging/bin/ 2>/dev/null || true
+          cp _build/bin/*.dylib staging/bin/
+
+          echo "-> Bundling pinned Boost 1.81.0 runtime libraries..."
+          cp "$HOME/boost-build-1.81.0/lib"/libboost_*.dylib staging/bin/
+
+          echo "-> Bundling pinned RocksDB 8.5.3 runtime libraries..."
+          cp /usr/local/lib/librocksdb.8.5.3.dylib staging/bin/
+          ln -sf librocksdb.8.5.3.dylib staging/bin/librocksdb.8.dylib
+          ln -sf librocksdb.8.dylib staging/bin/librocksdb.dylib
+
+          echo "-> Bundling OpenSSL 3 runtime libraries..."
+          cp /opt/homebrew/opt/openssl@3/lib/libcrypto.3.dylib staging/bin/
+          cp /opt/homebrew/opt/openssl@3/lib/libssl.3.dylib staging/bin/
+
+          chmod -R u+w staging/bin
+
+          echo "-> Inscribing @loader_path RPATH for standalone portability..."
+          install_name_tool -add_rpath "@loader_path" staging/bin/sirius.bc 2>/dev/null || true
+          install_name_tool -add_rpath "@loader_path/." staging/bin/sirius.bc 2>/dev/null || true
+          if [ -f staging/bin/catapult.recovery ]; then
+            install_name_tool -add_rpath "@loader_path" staging/bin/catapult.recovery 2>/dev/null || true
+          fi
+          for dylib in staging/bin/*.dylib; do
+            install_name_tool -add_rpath "@loader_path" "$dylib" 2>/dev/null || true
+          done
+
+          echo "-> Ad-hoc codesigning all binaries..."
+          codesign --force --sign - staging/bin/sirius.bc
+          for dylib in staging/bin/*.dylib; do
+            codesign --force --sign - "$dylib" 2>/dev/null || true
+          done
+
+          echo "=== Verification: Linked Libraries for sirius.bc ==="
+          otool -L staging/bin/sirius.bc
+
+          echo "-> Packaging distribution archive..."
+          tar -czf dist/sirius-darwin-arm64.tar.gz -C staging bin
+
+          cd dist
+          shasum -a 256 sirius-darwin-arm64.tar.gz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload Engine Candidate Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sirius-darwin-arm64
+          path: dist/*
+          retention-days: 7
+
+      - name: Determine Tag Name
+        id: tag
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag_name != '')
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "val=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "val=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Publish GitHub Release
+        if: steps.tag.outputs.val != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.val }}
+          name: "Sirius Core Native Engine ${{ steps.tag.outputs.val }}"
+          draft: false
+          prerelease: false
+          files: |
+            dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

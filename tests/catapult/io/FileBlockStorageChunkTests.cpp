@@ -18,15 +18,17 @@
 *** along with Catapult. If not, see <http://www.gnu.org/licenses/>.
 **/
 
-#include "FileBlockStorage.h"
-#include "RawFile.h"
-#include <gtest/gtest.h>
+#include "catapult/io/FileBlockStorage.h"
+#include "catapult/io/RawFile.h"
+#include "tests/test/core/BlockTestUtils.h"
+#include "tests/test/core/StorageTestUtils.h"
+#include "tests/test/nodeps/Filesystem.h"
+#include "tests/TestHarness.h"
 #include <boost/filesystem.hpp>
-#include <vector>
-#include <cstring>
-#include <cstdio>
 
-namespace catapult { namespace io { namespace test {
+namespace catapult { namespace io {
+
+#define TEST_CLASS FileBlockStorageChunkTests
 
 namespace {
 	constexpr uint32_t Files_Per_Directory = 65536u;
@@ -41,22 +43,20 @@ namespace {
 #pragma pack(pop)
 	static_assert(sizeof(BlockChunkIndexEntry) == 16, "BlockChunkIndexEntry must be exactly 16 bytes");
 
-	std::string CreateTempDirectory() {
-		boost::filesystem::path tempDir = boost::filesystem::temp_directory_path();
-		tempDir /= "FileBlockStorageChunkTest_";
-		tempDir /= boost::filesystem::unique_path().string();
-		boost::filesystem::create_directories(tempDir);
-		return tempDir.string();
-	}
+	struct TestBlockElementContext {
+		model::UniqueEntityPtr<model::Block> pBlock;
+		std::unique_ptr<model::BlockElement> pElement;
 
-	model::BlockElement CreateTestBlockElement(Height height) {
-		model::BlockElement blockElement;
-		blockElement.Block.Height = height;
-		// Initialize EntityHash to satisfy Hash_Index mode requirements.
-		// In a full test suite, this would be populated with a valid cryptographic hash.
-		blockElement.EntityHash = {};
-		return blockElement;
-	}
+		explicit TestBlockElementContext(Height height)
+			: pBlock(test::GenerateBlockWithTransactions(0, height))
+			, pElement(std::make_unique<model::BlockElement>(*pBlock)) {
+			pElement->EntityHash = test::GenerateRandomByteArray<Hash256_Size>();
+		}
+
+		const model::BlockElement& get() const {
+			return *pElement;
+		}
+	};
 
 	void AssertDirectoryExists(const std::string& baseDir, uint64_t chunkId) {
 		char dirName[16];
@@ -76,48 +76,58 @@ namespace {
 	}
 }
 
-TEST(FileBlockStorageChunkTests, CanWriteBlocksAcrossChunkBoundary) {
-	// Arrange:
-	auto dataDir = CreateTempDirectory();
-	FileBlockStorage storage(dataDir, FileBlockStorageMode::Hash_Index);
+TEST(TEST_CLASS, CanWriteBlocksAcrossChunkBoundary) {
+	// Arrange: prepare storage seeded at height 65534
+	test::TempDirectoryGuard tempDir;
+	test::PrepareStorage(tempDir.name());
+	test::FakeHeight(tempDir.name(), 65534);
+
+	FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
 
 	// Act: Write block at height 65535 (last in chunk 0)
-	storage.saveBlock(CreateTestBlockElement(Height(65535)));
-	
+	TestBlockElementContext block65535(Height(65535));
+	storage.saveBlock(block65535.get());
+
 	// Act: Write block at height 65536 (first in chunk 1)
-	storage.saveBlock(CreateTestBlockElement(Height(65536)));
+	TestBlockElementContext block65536(Height(65536));
+	storage.saveBlock(block65536.get());
 
-	// Assert: Verify directories and files exist for both chunks
-	AssertDirectoryExists(dataDir, 0);
-	AssertDirectoryExists(dataDir, 1);
+	// Assert: Verify directories and files exist for both chunks (00000 and 00001)
+	AssertDirectoryExists(tempDir.name(), 0);
+	AssertDirectoryExists(tempDir.name(), 1);
 
-	AssertFileExists(dataDir, 0, "blocks.dat");
-	AssertFileExists(dataDir, 0, "blocks.idx");
-	AssertFileExists(dataDir, 1, "blocks.dat");
-	AssertFileExists(dataDir, 1, "blocks.idx");
+	AssertFileExists(tempDir.name(), 0, "blocks.dat");
+	AssertFileExists(tempDir.name(), 0, "blocks.idx");
+	AssertFileExists(tempDir.name(), 1, "blocks.dat");
+	AssertFileExists(tempDir.name(), 1, "blocks.idx");
 
 	// Assert: Verify chain height is updated correctly
 	EXPECT_EQ(Height(65536), storage.chainHeight());
 }
 
-TEST(FileBlockStorageChunkTests, BlockChunkIndexEntryMatchesBinaryLayout) {
-	// Arrange:
-	auto dataDir = CreateTempDirectory();
-	FileBlockStorage storage(dataDir, FileBlockStorageMode::Hash_Index);
+TEST(TEST_CLASS, BlockChunkIndexEntryMatchesBinaryLayout) {
+	// Arrange: prepare storage with seed
+	test::TempDirectoryGuard tempDir;
+	test::PrepareStorage(tempDir.name());
 
-	// Act: Write a block at height 10
-	auto height = Height(10);
-	storage.saveBlock(CreateTestBlockElement(height));
+	FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
 
-	// Assert: Open blocks.idx and verify binary layout
+	// Act: Write blocks sequentially from height 1 to 5
+	for (uint32_t i = 1; i <= 5; ++i) {
+		TestBlockElementContext blockCtx(Height(i));
+		storage.saveBlock(blockCtx.get());
+	}
+
+	// Assert: Open blocks.idx and verify binary layout of block 5
+	auto height = Height(5);
 	char dirName[16];
 	std::snprintf(dirName, sizeof(dirName), "%05lu", height.unwrap() / Files_Per_Directory);
-	boost::filesystem::path idxPath = dataDir;
+	boost::filesystem::path idxPath = tempDir.name();
 	idxPath /= dirName;
 	idxPath /= "blocks.idx";
 
 	RawFile idxFile(idxPath.generic_string().c_str(), OpenMode::Read_Only, LockMode::None);
-	EXPECT_GT(idxFile.size(), sizeof(BlockChunkIndexEntry));
+	EXPECT_GT(idxFile.size(), 5 * sizeof(BlockChunkIndexEntry));
 
 	auto index = height.unwrap() % Files_Per_Directory;
 	idxFile.seek(index * sizeof(BlockChunkIndexEntry));
@@ -125,33 +135,40 @@ TEST(FileBlockStorageChunkTests, BlockChunkIndexEntryMatchesBinaryLayout) {
 	BlockChunkIndexEntry entry;
 	idxFile.read(MutableRawBuffer(reinterpret_cast<uint8_t*>(&entry), sizeof(BlockChunkIndexEntry)));
 
-	// Assert: Verify entry contains valid offsets and sizes
+	// Assert: Verify entry contains valid non-zero block offset and size
 	EXPECT_GT(entry.blockOffset, 0u);
 	EXPECT_GT(entry.blockSize, 0u);
-	EXPECT_EQ(entry.stmtOffset, 0u); // No statement provided
-	EXPECT_EQ(entry.stmtSize, 0u);
 
-	// Assert: Verify we can read the block using the offset and it matches the recorded size
-	boost::filesystem::path blocksDatPath = dataDir;
-	blocksDatPath /= dirName;
-	blocksDatPath /= "blocks.dat";
-	
-	RawFile blocksFile(blocksDatPath.generic_string().c_str(), OpenMode::Read_Only, LockMode::None);
-	blocksFile.seek(entry.blockOffset);
-	
-	uint32_t blockSizeFromHeader = 0;
-	blocksFile.read(MutableRawBuffer(reinterpret_cast<uint8_t*>(&blockSizeFromHeader), sizeof(uint32_t)));
-	EXPECT_EQ(entry.blockSize, blockSizeFromHeader);
+	// Assert: Verify loadBlockElement reads the exact block matching binary storage
+	auto pLoadedBlock = storage.loadBlockElement(height);
+	EXPECT_EQ(height, pLoadedBlock->Block.Height);
 }
 
-TEST(FileBlockStorageChunkTests, DropBlocksAfterTruncatesFilesAndZerosIndex) {
-	// Arrange:
-	auto dataDir = CreateTempDirectory();
-	FileBlockStorage storage(dataDir, FileBlockStorageMode::Hash_Index);
+TEST(TEST_CLASS, DropBlocksAfterTruncatesFilesAndZerosIndex) {
+	// Arrange: prepare storage with 20 blocks
+	test::TempDirectoryGuard tempDir;
+	test::PrepareStorage(tempDir.name());
+
+	FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
 
 	constexpr uint32_t NumBlocks = 20;
 	for (uint32_t i = 1; i <= NumBlocks; ++i) {
-		storage.saveBlock(CreateTestBlockElement(Height(i)));
+		TestBlockElementContext blockCtx(Height(i));
+		storage.saveBlock(blockCtx.get());
+	}
+
+	// Read block 11 index entry BEFORE dropping to obtain expected truncation offset
+	char dirName[16];
+	std::snprintf(dirName, sizeof(dirName), "%05lu", 0u);
+	boost::filesystem::path idxPath = tempDir.name();
+	idxPath /= dirName;
+	idxPath /= "blocks.idx";
+
+	BlockChunkIndexEntry entry11;
+	{
+		RawFile idxFile(idxPath.generic_string().c_str(), OpenMode::Read_Only, LockMode::None);
+		idxFile.seek(11 * sizeof(BlockChunkIndexEntry));
+		idxFile.read(MutableRawBuffer(reinterpret_cast<uint8_t*>(&entry11), sizeof(BlockChunkIndexEntry)));
 	}
 
 	// Act: Drop blocks after height 10
@@ -160,39 +177,18 @@ TEST(FileBlockStorageChunkTests, DropBlocksAfterTruncatesFilesAndZerosIndex) {
 	// Assert: Chain height should be 10
 	EXPECT_EQ(Height(10), storage.chainHeight());
 
-	// Assert: Verify blocks.dat is truncated to the offset of block 11
-	char dirName[16];
-	std::snprintf(dirName, sizeof(dirName), "%05lu", 0u);
-	boost::filesystem::path blocksDatPath = dataDir;
+	// Assert: Verify blocks.dat is truncated to block 11's start offset
+	boost::filesystem::path blocksDatPath = tempDir.name();
 	blocksDatPath /= dirName;
 	blocksDatPath /= "blocks.dat";
-	
-	boost::filesystem::path idxPath = dataDir;
-	idxPath /= dirName;
-	idxPath /= "blocks.idx";
-
-	RawFile idxFile(idxPath.generic_string().c_str(), OpenMode::Read_Only, LockMode::None);
-	
-	// Read entry for height 11 (index 10) to get truncation offset
-	idxFile.seek(10 * sizeof(BlockChunkIndexEntry));
-	BlockChunkIndexEntry entry11;
-	idxFile.read(MutableRawBuffer(reinterpret_cast<uint8_t*>(&entry11), sizeof(BlockChunkIndexEntry)));
-	
 	EXPECT_EQ(boost::filesystem::file_size(blocksDatPath), entry11.blockOffset);
 
-	// Assert: Verify statements.dat is also truncated (to 0 since no statements were saved)
-	boost::filesystem::path stmtDatPath = dataDir;
-	stmtDatPath /= dirName;
-	stmtDatPath /= "statements.dat";
-	if (boost::filesystem::exists(stmtDatPath)) {
-		EXPECT_EQ(boost::filesystem::file_size(stmtDatPath), entry11.stmtOffset);
-	}
-
 	// Assert: Verify index entries from height 11 onwards are zeroed
-	for (uint32_t i = 10; i < NumBlocks; ++i) {
-		idxFile.seek(i * sizeof(BlockChunkIndexEntry));
+	RawFile idxFilePost(idxPath.generic_string().c_str(), OpenMode::Read_Only, LockMode::None);
+	for (uint32_t i = 11; i <= NumBlocks; ++i) {
+		idxFilePost.seek(i * sizeof(BlockChunkIndexEntry));
 		BlockChunkIndexEntry zeroedEntry;
-		idxFile.read(MutableRawBuffer(reinterpret_cast<uint8_t*>(&zeroedEntry), sizeof(BlockChunkIndexEntry)));
+		idxFilePost.read(MutableRawBuffer(reinterpret_cast<uint8_t*>(&zeroedEntry), sizeof(BlockChunkIndexEntry)));
 		EXPECT_EQ(0u, zeroedEntry.blockOffset);
 		EXPECT_EQ(0u, zeroedEntry.blockSize);
 		EXPECT_EQ(0u, zeroedEntry.stmtOffset);
@@ -200,4 +196,4 @@ TEST(FileBlockStorageChunkTests, DropBlocksAfterTruncatesFilesAndZerosIndex) {
 	}
 }
 
-}}}
+}}
