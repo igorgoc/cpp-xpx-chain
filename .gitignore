@@ -42,4 +42,6 @@ temp
 # CMake test files
 CTestTestfile.cmake
 .DS_Store
+staging/
+dist/
 
