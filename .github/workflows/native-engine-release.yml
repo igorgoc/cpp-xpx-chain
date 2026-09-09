@@ -333,12 +333,8 @@ jobs:
           pluginsDirectory = $PWD/staging/bin
           EOF
           
-          # Configure async logging into test logs directory
-          sed -i "s|sinkType = Sync.*|sinkType = Async|g" "$TEST_DIR/resources/config-logging-server.properties" || true
-          sed -i "s|directory = .*|directory = $TEST_DIR/logs|g" "$TEST_DIR/resources/config-logging-server.properties" || true
-          
           echo "-> Launching sirius.bc engine in background..."
-          ./staging/bin/sirius.bc "$TEST_DIR" &
+          ./staging/bin/sirius.bc "$TEST_DIR" > "$TEST_DIR/logs/console.log" 2>&1 &
           NODE_PID=$!
           echo "Engine PID: $NODE_PID"
           
@@ -359,15 +355,25 @@ jobs:
           done
           
           if [ $SUCCESS -eq 0 ]; then
-              if kill -0 $NODE_PID 2>/dev/null; then
-                  echo "✓ Process active and healthy after 10s."
-                  SUCCESS=1
-              fi
+              echo "::error::CRITICAL: sirius.bc engine failed to bind network sockets within 10s!"
+              cat "$TEST_DIR/logs"/* 2>/dev/null || true
+              kill -9 $NODE_PID 2>/dev/null || true
+              exit 1
           fi
           
           echo "-> Sending graceful SIGINT (signal 2) shutdown..."
-          kill -2 $NODE_PID
-          wait $NODE_PID 2>/dev/null || true
+          kill -2 $NODE_PID 2>/dev/null || true
+          for i in $(seq 1 10); do
+              if ! kill -0 $NODE_PID 2>/dev/null; then
+                  echo "✓ Process exited gracefully."
+                  break
+              fi
+              sleep 1
+          done
+          if kill -0 $NODE_PID 2>/dev/null; then
+              echo "Warning: Process did not exit within 10s; sending SIGKILL..."
+              kill -9 $NODE_PID 2>/dev/null || true
+          fi
           echo "✓ Verification gate passed: Engine launches, initializes, and shuts down cleanly."
           rm -rf "$TEST_DIR"
 
