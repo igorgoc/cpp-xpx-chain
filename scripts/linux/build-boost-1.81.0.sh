@@ -42,7 +42,8 @@ echo "-> Compiling and installing Boost libraries..."
     link=shared,static \
     threading=multi \
     variant=release \
-    cxxflags="-fPIC" \
+    cxxflags="-fPIC -march=x86-64 -mtune=generic" \
+    cflags="-fPIC -march=x86-64 -mtune=generic" \
     -j"${CORES}" \
     install
 
