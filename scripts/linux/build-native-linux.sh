@@ -40,6 +40,7 @@ cmake \
   -DENABLE_MONGO=OFF \
   -DENABLE_ZEROMQ=OFF \
   -DXPX_STORAGE_SDK_NOT_BUILD_EXAMPLES=ON \
+  -DDO_NOT_SKIP_BUILD_TESTS=OFF \
   -DCMAKE_CXX_FLAGS="-pthread -include cstdint" \
   -DCMAKE_C_FLAGS="-pthread" \
   ${CCACHE_OPTS} \

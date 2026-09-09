@@ -83,7 +83,7 @@ endfunction()
 ### add source directories
 add_subdirectory(external)
 
-if(NOT APPLE)
+if(NOT APPLE AND NOT DEFINED DO_NOT_SKIP_BUILD_TESTS)
 	set(DO_NOT_SKIP_BUILD_TESTS TRUE)
 endif()
 

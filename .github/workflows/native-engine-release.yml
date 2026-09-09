@@ -279,6 +279,8 @@ jobs:
             libsnappy-dev \
             libzstd-dev \
             libssl-dev \
+            libgtest-dev \
+            libbenchmark-dev \
             net-tools
 
       - name: Restore Pinned Toolchain (Boost 1.81.0 + RocksDB 8.5.3) Cache
