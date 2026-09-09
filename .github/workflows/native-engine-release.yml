@@ -312,18 +312,15 @@ jobs:
           echo " Running Engine Verification Gate (Live Boot Test)"
           echo "=========================================================="
           
-          # Clone proximax-sirius-core shallowly for authentic mainnet chainconfig
-          git clone --depth 1 https://github.com/igorgoc/proximax-sirius-core.git /tmp/proximax-sirius-core
-          
           TEST_DIR="/tmp/sirius-engine-test"
           rm -rf "$TEST_DIR"
           mkdir -p "$TEST_DIR/data/00000" "$TEST_DIR/resources" "$TEST_DIR/certificate" "$TEST_DIR/logs"
           
-          # Copy resources & genesis block
-          cp -r /tmp/proximax-sirius-core/chainconfig/resources/* "$TEST_DIR/resources/"
-          cp /tmp/proximax-sirius-core/chainconfig/genesis_seed/00000/00001.dat "$TEST_DIR/data/00000/"
-          cp /tmp/proximax-sirius-core/chainconfig/genesis_seed/00000/hashes.dat "$TEST_DIR/data/00000/"
-          cp /tmp/proximax-sirius-core/chainconfig/genesis_seed/index.dat "$TEST_DIR/data/"
+          # Copy self-contained verification fixtures (resources & authentic genesis block)
+          cp -r scripts/ci/fixtures/resources/* "$TEST_DIR/resources/"
+          cp scripts/ci/fixtures/genesis_seed/00000/00001.dat "$TEST_DIR/data/00000/"
+          cp scripts/ci/fixtures/genesis_seed/00000/hashes.dat "$TEST_DIR/data/00000/"
+          cp scripts/ci/fixtures/genesis_seed/index.dat "$TEST_DIR/data/"
           
           # Configure test paths pointing to staging/bin plugins
           cat << EOF > "$TEST_DIR/resources/config-user.properties"
@@ -372,7 +369,7 @@ jobs:
           kill -2 $NODE_PID
           wait $NODE_PID 2>/dev/null || true
           echo "✓ Verification gate passed: Engine launches, initializes, and shuts down cleanly."
-          rm -rf "$TEST_DIR" /tmp/proximax-sirius-core
+          rm -rf "$TEST_DIR"
 
       - name: Package Linux Standalone Engine
         run: |

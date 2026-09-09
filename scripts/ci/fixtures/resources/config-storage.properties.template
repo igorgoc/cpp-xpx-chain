@@ -1,0 +1,14 @@
+[replicator]
+
+transactionTimeout = 1h
+useTcpSocket = true
+host = 0.0.0.0
+storageDirectory = /data/drives
+rpcPort = 7905
+rpcHandleLostConnection = false
+key = REPLICATOR_PRIVATE_KEY
+rpcDbgChildCrash = true
+port = 7904
+useRpcReplicator = true
+rpcHost = 127.0.0.1
+sandboxDirectory = /data/drives/drive-sandboxes

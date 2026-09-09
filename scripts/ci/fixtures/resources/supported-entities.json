@@ -1,0 +1,399 @@
+{
+    "entities": [
+        {
+            "name": "Account_Link",
+            "type": "16716",
+            "supportedVersions": [
+                2
+            ]
+        },
+        {
+            "name": "Account_Metadata_v2",
+            "type": "16703",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "Address_Metadata",
+            "type": "16701",
+            "supportedVersions": []
+        },
+        {
+            "name": "Address_Property",
+            "type": "16720",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "Aggregate_Bonded",
+            "type": "16961",
+            "supportedVersions": [
+                2,
+                3
+            ]
+        },
+        {
+            "name": "Aggregate_Complete",
+            "type": "16705",
+            "supportedVersions": [
+                2,
+                3
+            ]
+        },
+        {
+            "name": "Alias_Address",
+            "type": "16974",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "Alias_Mosaic",
+            "type": "17230",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "Block",
+            "type": "33091",
+            "supportedVersions": [
+                3,
+                4,
+                5,
+                6,
+                7
+            ]
+        },
+        {
+            "name": "BlockChain_Upgrade",
+            "type": "16728",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "Harvester_Add",
+            "type": "16737",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "Harvester_Remove",
+            "type": "16993",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "Hash_Lock",
+            "type": "16712",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "Modify_Multisig_Account",
+            "type": "16725",
+            "supportedVersions": [
+                3
+            ]
+        },
+        {
+            "name": "Mosaic_Definition",
+            "type": "16717",
+            "supportedVersions": [
+                3
+            ]
+        },
+        {
+            "name": "Mosaic_Metadata",
+            "type": "16957",
+            "supportedVersions": []
+        },
+        {
+            "name": "Mosaic_Metadata_v2",
+            "type": "16959",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "Mosaic_Modify_Levy",
+            "type": "17229",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "Mosaic_Property",
+            "type": "16976",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "Mosaic_Remove_Levy",
+            "type": "17485",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "Mosaic_Supply_Change",
+            "type": "16973",
+            "supportedVersions": [
+                2
+            ]
+        },
+        {
+            "name": "Namespace_Metadata",
+            "type": "17213",
+            "supportedVersions": []
+        },
+        {
+            "name": "Namespace_Metadata_v2",
+            "type": "17215",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "Nemesis_Block",
+            "type": "32835",
+            "supportedVersions": [
+                3
+            ]
+        },
+        {
+            "name": "Network_Config",
+            "type": "16729",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "Register_Namespace",
+            "type": "16718",
+            "supportedVersions": [
+                2
+            ]
+        },
+        {
+            "name": "Secret_Lock",
+            "type": "16722",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "Secret_Proof",
+            "type": "16978",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "Transaction_Type_Property",
+            "type": "17232",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "Transfer",
+            "type": "16724",
+            "supportedVersions": [
+                3
+            ]
+        },
+        {
+            "name": "addDbrbProcess",
+            "type": "16748",
+            "supportedVersions": []
+        },
+        {
+            "name": "addOrUpdateDbrbProcess",
+            "type": "17516",
+            "supportedVersions": [
+                2
+            ]
+        },      
+        {
+            "name": "removeDbrbProcess",
+            "type": "17004",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+			"name": "removeDbrbProcessByNetwork",
+			"type": "17260",
+			"supportedVersions": [
+                1
+            ]
+		},
+        {
+            "name": "exchange",
+            "type": "16989",
+            "supportedVersions": [
+                2
+            ]
+        },
+        {
+            "name": "exchangeOffer",
+            "type": "16733",
+            "supportedVersions": [
+                4
+            ]
+        },
+        {
+            "name": "createLiquidityProvider",
+            "type": "16745",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "placeSdaExchangeOffer",
+            "type": "16746",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "manualRateChange",
+            "type": "17001",
+            "supportedVersions": [
+                1
+            ]
+        },        
+        {
+            "name": "removeExchangeOffer",
+            "type": "17245",
+            "supportedVersions": [
+                2
+            ]
+        },
+        {
+            "name": "removeSdaExchangeOffer",
+            "type": "17002",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "replicatorOnboarding",
+            "type": "18018",
+            "supportedVersions": [
+                2
+            ]
+        },
+        {
+            "name": "dataModificationApproval",
+            "type": "17506",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "dataModificationCancel",
+            "type": "17762",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "dataModificationSingleApproval",
+            "type": "19298",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "dataModification",
+            "type": "16994",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "downloadApproval",
+            "type": "19810",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "downloadPayment",
+            "type": "18786",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "download",
+            "type": "17250",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "driveClosure",
+            "type": "20066",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "endDriveVerification",
+            "type": "20322",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "finishDownload",
+            "type": "18530",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "prepareBcDrive",
+            "type": "16738",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "replicatorOffboarding",
+            "type": "18274",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "replicatorsCleanup",
+            "type": "16482",
+            "supportedVersions": []
+        },
+        {
+            "name": "storagePayment",
+            "type": "19042",
+            "supportedVersions": [
+                1
+            ]
+        },
+        {
+            "name": "verificationPayment",
+            "type": "19554",
+            "supportedVersions": [
+                1
+            ]
+        }
+    ]
+}

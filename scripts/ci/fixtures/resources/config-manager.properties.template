@@ -1,0 +1,4 @@
+[manager]
+
+bootkey.source = generated
+data.path = ./chainconfig/data
