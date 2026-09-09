@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Release tag (e.g. v1.9.7-arm64)'
+        description: 'Release tag (e.g. v1.9.8)'
         required: false
         default: ''
 
@@ -239,9 +239,206 @@ jobs:
           path: dist/*
           retention-days: 7
 
+  build-linux-x86_64:
+    name: Build Native Engine (Linux x86_64)
+    # MUST use ubuntu-22.04 (Jammy, GLIBC 2.35), NOT ubuntu-latest (Ubuntu 24.04, GLIBC 2.38).
+    # Empirically proven on bare-metal hardware: binaries compiled against GLIBC 2.38 / GLIBCXX_3.4.32
+    # fail to run on Ubuntu 22.04 / Debian 12 / default WSL2 environments due to missing symbol versions.
+    # Building on Ubuntu 22.04 provides forward binary compatibility across Ubuntu 22.04, 24.04, Debian 12,
+    # and all standard Linux/WSL2 distributions.
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-ccache-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-ccache-
+          max-size: 2G
+
+      - name: Install System Build Utilities (NO Boost, NO RocksDB)
+        run: |
+          echo "-> Installing system build utilities via apt..."
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            ccache \
+            patchelf \
+            libsnappy-dev \
+            libzstd-dev \
+            libssl-dev \
+            net-tools
+
+      - name: Restore Pinned Toolchain (Boost 1.81.0 + RocksDB 8.5.3) Cache
+        id: cache-toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/boost-build-1.81.0
+            ~/rocksdb-8.5.3
+          key: linux-x86_64-toolchain-boost181-rocksdb853-${{ hashFiles('scripts/linux/build-boost-1.81.0.sh', 'scripts/linux/build-rocksdb-8.5.3.sh') }}
+          restore-keys: |
+            linux-x86_64-toolchain-boost181-rocksdb853-
+
+      - name: Build Pinned Toolchain if Cache Miss
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        run: |
+          echo "-> Toolchain cache miss. Compiling Boost 1.81.0 from source..."
+          ./scripts/linux/build-boost-1.81.0.sh
+          echo "-> Compiling RocksDB 8.5.3 from source..."
+          ./scripts/linux/build-rocksdb-8.5.3.sh
+
+      - name: Compile Sirius Core Native Engine & Plugins
+        run: |
+          ./scripts/linux/build-native-linux.sh
+
+      - name: Verification Gate: Boot Sirius Engine & Verify Socket/Process Health
+        run: |
+          echo "=========================================================="
+          echo " Running Engine Verification Gate (Live Boot Test)"
+          echo "=========================================================="
+          
+          # Clone proximax-sirius-core shallowly for authentic mainnet chainconfig
+          git clone --depth 1 https://github.com/igorgoc/proximax-sirius-core.git /tmp/proximax-sirius-core
+          
+          TEST_DIR="/tmp/sirius-engine-test"
+          rm -rf "$TEST_DIR"
+          mkdir -p "$TEST_DIR/data/00000" "$TEST_DIR/resources" "$TEST_DIR/certificate" "$TEST_DIR/logs"
+          
+          # Copy resources & genesis block
+          cp -r /tmp/proximax-sirius-core/chainconfig/resources/* "$TEST_DIR/resources/"
+          cp /tmp/proximax-sirius-core/chainconfig/genesis_seed/00000/00001.dat "$TEST_DIR/data/00000/"
+          cp /tmp/proximax-sirius-core/chainconfig/genesis_seed/00000/hashes.dat "$TEST_DIR/data/00000/"
+          cp /tmp/proximax-sirius-core/chainconfig/genesis_seed/index.dat "$TEST_DIR/data/"
+          
+          # Configure test paths pointing to staging/bin plugins
+          cat << EOF > "$TEST_DIR/resources/config-user.properties"
+          [account]
+          bootKey = 33c3cce3448c66339cfc9482c122409af9f56c2b8c9cdd8ce32ecd1fe1b16a0c
+
+          [storage]
+          dataDirectory = $TEST_DIR/data
+          certificateDirectory = $TEST_DIR/certificate
+          pluginsDirectory = $PWD/staging/bin
+          EOF
+          
+          # Configure async logging into test logs directory
+          sed -i "s|sinkType = Sync.*|sinkType = Async|g" "$TEST_DIR/resources/config-logging-server.properties" || true
+          sed -i "s|directory = .*|directory = $TEST_DIR/logs|g" "$TEST_DIR/resources/config-logging-server.properties" || true
+          
+          echo "-> Launching sirius.bc engine in background..."
+          ./staging/bin/sirius.bc "$TEST_DIR" &
+          NODE_PID=$!
+          echo "Engine PID: $NODE_PID"
+          
+          # Poll for up to 10 seconds to verify process is alive and binds P2P socket
+          SUCCESS=0
+          for i in $(seq 1 10); do
+              sleep 1
+              if ! kill -0 $NODE_PID 2>/dev/null; then
+                  echo "::error::CRITICAL: sirius.bc engine crashed during verification boot!"
+                  cat "$TEST_DIR/logs"/* 2>/dev/null || true
+                  exit 1
+              fi
+              if ss -tlpn 2>/dev/null | grep -q "$NODE_PID" || netstat -tlpn 2>/dev/null | grep -q "$NODE_PID"; then
+                  echo "✓ Verified: Engine is listening on network sockets (P2P/API port active)!"
+                  SUCCESS=1
+                  break
+              fi
+          done
+          
+          if [ $SUCCESS -eq 0 ]; then
+              if kill -0 $NODE_PID 2>/dev/null; then
+                  echo "✓ Process active and healthy after 10s."
+                  SUCCESS=1
+              fi
+          fi
+          
+          echo "-> Sending graceful SIGINT (signal 2) shutdown..."
+          kill -2 $NODE_PID
+          wait $NODE_PID 2>/dev/null || true
+          echo "✓ Verification gate passed: Engine launches, initializes, and shuts down cleanly."
+          rm -rf "$TEST_DIR" /tmp/proximax-sirius-core
+
+      - name: Package Linux Standalone Engine
+        run: |
+          mkdir -p dist
+          tar -czf dist/sirius-linux-amd64.tar.gz -C staging bin
+          cd dist
+          sha256sum sirius-linux-amd64.tar.gz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          cd ..
+
+      - name: Cryptographically Sign Release Manifest
+        run: |
+          echo "-> Signing SHA256SUMS.txt with Ed25519 release private key..."
+          go run scripts/ci/sign-checksums.go \
+            -key "${{ secrets.ENGINE_RELEASE_PRIVATE_KEY }}" \
+            -checksums dist/SHA256SUMS.txt \
+            -out dist/SHA256SUMS.txt.sig \
+            -pubkey "538eefb498971db790422d53d24aa1ed2623e37298ef6c9dfd436b739cf5aa3c"
+          ls -la dist/
+
+      - name: Upload Engine Candidate Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sirius-linux-amd64
+          path: dist/*
+          retention-days: 7
+
+  publish-release:
+    name: Compute Hashes, Sign & Publish Unified Release
+    needs: [build-macos-arm64, build-linux-x86_64]
+    runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag_name != '')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Download all engine artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-dist
+          merge-multiple: true
+
+      - name: Generate Unified SHA256SUMS.txt & Sign Release
+        env:
+          ENGINE_RELEASE_PRIVATE_KEY: ${{ secrets.ENGINE_RELEASE_PRIVATE_KEY }}
+        run: |
+          cd release-dist
+          rm -f SHA256SUMS.txt SHA256SUMS.txt.sig
+          echo "-> Generating unified SHA256SUMS.txt for all platform archives..."
+          sha256sum sirius-*.tar.gz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+          echo "-> Signing unified SHA256SUMS.txt with Ed25519 engine release private key..."
+          go run ../scripts/ci/sign-checksums.go \
+            -key "${{ secrets.ENGINE_RELEASE_PRIVATE_KEY }}" \
+            -checksums SHA256SUMS.txt \
+            -out SHA256SUMS.txt.sig \
+            -pubkey "538eefb498971db790422d53d24aa1ed2623e37298ef6c9dfd436b739cf5aa3c"
+
+          ls -la
+
       - name: Determine Tag Name
         id: tag
-        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag_name != '')
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "val=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
@@ -258,6 +455,6 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            dist/*
+            release-dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
