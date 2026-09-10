@@ -290,17 +290,15 @@ jobs:
           path: |
             ~/boost-build-1.81.0
             ~/rocksdb-8.5.3
-          key: linux-x86_64-toolchain-boost181-rocksdb853-${{ hashFiles('scripts/linux/build-boost-1.81.0.sh', 'scripts/linux/build-rocksdb-8.5.3.sh') }}
-          restore-keys: |
-            linux-x86_64-toolchain-boost181-rocksdb853-
+          key: linux-x86_64-toolchain-v3-portable-boost181-rocksdb853-${{ hashFiles('scripts/linux/build-boost-1.81.0.sh', 'scripts/linux/build-rocksdb-8.5.3.sh') }}
 
       - name: Build Pinned Toolchain if Cache Miss
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
-          echo "-> Toolchain cache miss. Compiling Boost 1.81.0 from source..."
-          ./scripts/linux/build-boost-1.81.0.sh
-          echo "-> Compiling RocksDB 8.5.3 from source..."
-          ./scripts/linux/build-rocksdb-8.5.3.sh
+          echo "-> Toolchain cache miss. Cleaning install dirs and compiling portable Boost 1.81.0 and RocksDB 8.5.3 from source..."
+          rm -rf ~/boost-build-1.81.0 ~/rocksdb-8.5.3
+          FORCE_REBUILD=1 ./scripts/linux/build-boost-1.81.0.sh
+          FORCE_REBUILD=1 ./scripts/linux/build-rocksdb-8.5.3.sh
 
       - name: Compile Sirius Core Native Engine & Plugins
         run: |
@@ -344,7 +342,10 @@ jobs:
               sleep 1
               if ! kill -0 $NODE_PID 2>/dev/null; then
                   echo "::error::CRITICAL: sirius.bc engine crashed during verification boot!"
-                  cat "$TEST_DIR/logs"/* 2>/dev/null || true
+                  echo "=== Engine console log ==="
+                  cat "$TEST_DIR/logs/console.log" 2>/dev/null || true
+                  echo "=== GDB Crash Inspection ==="
+                  which gdb >/dev/null 2>&1 && gdb -batch -ex "set env LD_LIBRARY_PATH staging/bin" -ex "run $TEST_DIR" -ex "bt" ./staging/bin/sirius.bc 2>&1 || true
                   exit 1
               fi
               if ss -tlpn 2>/dev/null | grep -q "$NODE_PID" || netstat -tlpn 2>/dev/null | grep -q "$NODE_PID"; then

@@ -12,7 +12,7 @@ echo " Install Destination: ${ROCKSDB_INSTALL_DIR}"
 echo " Cores: ${CORES}"
 echo "=========================================================="
 
-if [ -f "${ROCKSDB_INSTALL_DIR}/include/rocksdb/db.h" ] && [ -f "${ROCKSDB_INSTALL_DIR}/lib/librocksdb.so" ]; then
+if [ "${FORCE_REBUILD:-0}" != "1" ] && [ -f "${ROCKSDB_INSTALL_DIR}/include/rocksdb/db.h" ] && [ -f "${ROCKSDB_INSTALL_DIR}/lib/librocksdb.so" ]; then
     echo "✓ RocksDB ${ROCKSDB_VERSION} already installed at ${ROCKSDB_INSTALL_DIR}"
     exit 0
 fi

@@ -13,7 +13,7 @@ echo " Install Destination: ${BOOST_INSTALL_DIR}"
 echo " Cores: ${CORES}"
 echo "=========================================================="
 
-if [ -f "${BOOST_INSTALL_DIR}/include/boost/version.hpp" ]; then
+if [ "${FORCE_REBUILD:-0}" != "1" ] && [ -f "${BOOST_INSTALL_DIR}/include/boost/version.hpp" ]; then
     echo "✓ Boost ${BOOST_VERSION} already installed at ${BOOST_INSTALL_DIR}"
     exit 0
 fi
@@ -42,8 +42,12 @@ echo "-> Compiling and installing Boost libraries..."
     link=shared,static \
     threading=multi \
     variant=release \
-    cxxflags="-fPIC -march=x86-64 -mtune=generic" \
-    cflags="-fPIC -march=x86-64 -mtune=generic" \
+    cxxflags="-fPIC" \
+    cxxflags="-march=x86-64" \
+    cxxflags="-mtune=generic" \
+    cflags="-fPIC" \
+    cflags="-march=x86-64" \
+    cflags="-mtune=generic" \
     -j"${CORES}" \
     install
 
