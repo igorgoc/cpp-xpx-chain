@@ -107,11 +107,9 @@ endif()
 
 # set runpath for built binaries on linux
 if(("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU") OR ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang" AND "${CMAKE_SYSTEM_NAME}" MATCHES "Linux"))
-	file(MAKE_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/boost")
 	set(CMAKE_SKIP_BUILD_RPATH FALSE)
 
 	# $origin - to load plugins when running the server
-	# $origin/boost - same, use our boost libs
 	set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_RPATH}:$ORIGIN:$ORIGIN/deps:$ORIGIN/../lib")
 	set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
 	set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
@@ -204,24 +202,16 @@ function(catapult_target TARGET_NAME)
 	# indicate boost as a dependency
 	target_link_libraries(${TARGET_NAME} ${Boost_LIBRARIES} ${CMAKE_DL_LIBS})
 
-	# copy boost shared libraries
-	foreach(BOOST_COMPONENT ATOMIC SYSTEM DATE_TIME REGEX TIMER CHRONO LOG THREAD FILESYSTEM PROGRAM_OPTIONS STACKTRACE_BACKTRACE)
-		if(MSVC)
+	# copy boost shared libraries on Windows MSVC
+	if(MSVC)
+		foreach(BOOST_COMPONENT ATOMIC SYSTEM DATE_TIME REGEX TIMER CHRONO LOG THREAD FILESYSTEM PROGRAM_OPTIONS STACKTRACE_BACKTRACE)
 			# copy into ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$(Configuration)
 			string(REPLACE ".lib" ".dll" BOOSTDLLNAME ${Boost_${BOOST_COMPONENT}_LIBRARY_RELEASE})
 			add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
 				COMMAND ${CMAKE_COMMAND} -E copy_if_different
 				"${BOOSTDLLNAME}" "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$(Configuration)")
-		elseif("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
-			# copy into ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/boost
-			set(BOOSTDLLNAME ${Boost_${BOOST_COMPONENT}_LIBRARY_RELEASE})
-			set(BOOSTVERSION "${Boost_MAJOR_VERSION}.${Boost_MINOR_VERSION}.${Boost_SUBMINOR_VERSION}")
-			get_filename_component(BOOSTFILENAME ${BOOSTDLLNAME} NAME)
-			add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
-				COMMAND ${CMAKE_COMMAND} -E copy_if_different
-				"${BOOSTDLLNAME}" "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/boost")
-		endif()
-	endforeach()
+		endforeach()
+	endif()
 
 	# put both plugins and plugins tests in same 'folder'
 	if(TARGET_NAME MATCHES "\.plugins")
