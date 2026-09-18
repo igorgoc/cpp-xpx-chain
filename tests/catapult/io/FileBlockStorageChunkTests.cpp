@@ -265,4 +265,52 @@ TEST(TEST_CLASS, DropBlocksAfterPreservesStatementsOfRetainedBlocksWhenNextBlock
 		EXPECT_EQ(0u, boost::filesystem::file_size(stmtDatPath));
 	}
 
+	TEST(TEST_CLASS, DropBlocksAfterAcrossChunkBoundaryPurgesFutureChunkAndPreservesCurrentChunk) {
+		// Arrange: prepare storage seeded at height 65534
+		test::TempDirectoryGuard tempDir;
+		test::PrepareStorage(tempDir.name());
+		test::FakeHeight(tempDir.name(), 65534);
+
+		FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+
+		// Block 65535 in chunk 00000 with Statement
+		TestBlockElementContext block65535(Height(65535));
+		auto pStatement65535 = std::make_shared<model::BlockStatement>();
+		pStatement65535->Receipts.emplace(model::ReceiptSource(), std::make_unique<model::Receipt>(model::ReceiptType::Mosaic_Levy, model::ReceiptVersion(1)));
+		const_cast<model::BlockElement&>(block65535.get()).OptionalStatement = pStatement65535;
+		storage.saveBlock(block65535.get());
+
+		// Block 65536 in chunk 00001 with Statement
+		TestBlockElementContext block65536(Height(65536));
+		auto pStatement65536 = std::make_shared<model::BlockStatement>();
+		pStatement65536->Receipts.emplace(model::ReceiptSource(), std::make_unique<model::Receipt>(model::ReceiptType::Mosaic_Levy, model::ReceiptVersion(1)));
+		const_cast<model::BlockElement&>(block65536.get()).OptionalStatement = pStatement65536;
+		storage.saveBlock(block65536.get());
+
+		// Assert both chunks exist before rollback
+		AssertDirectoryExists(tempDir.name(), 0);
+		AssertDirectoryExists(tempDir.name(), 1);
+
+		// Act: Rollback to block 65535 (boundary of chunk 00000)
+		storage.dropBlocksAfter(Height(65535));
+
+		// Assert: Chain height should be 65535
+		EXPECT_EQ(Height(65535), storage.chainHeight());
+
+		// Assert: Chunk 00000 exists and has its statement intact
+		AssertDirectoryExists(tempDir.name(), 0);
+		auto [stmtData, hasStmt] = storage.loadBlockStatementData(Height(65535));
+		EXPECT_TRUE(hasStmt);
+		EXPECT_GT(stmtData.size(), 0u);
+
+		auto pLoadedBlock = storage.loadBlockElement(Height(65535));
+		EXPECT_TRUE(pLoadedBlock->OptionalStatement != nullptr);
+		EXPECT_EQ(1u, pLoadedBlock->OptionalStatement->Receipts.size());
+
+		// Assert: Chunk 00001 is completely removed
+		boost::filesystem::path chunk1Path = tempDir.name();
+		chunk1Path /= "00001";
+		EXPECT_FALSE(boost::filesystem::exists(chunk1Path)) << "Chunk directory 00001 should have been purged";
+	}
+
 }}

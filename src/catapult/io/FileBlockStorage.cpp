@@ -373,43 +373,60 @@ namespace catapult { namespace io {
 			return;
 		}
 
-		auto nextHeight = height + Height(1);
-		BlockChunkIndexEntry nextEntry;
-		if (HasChunkIndexEntry(m_dataDirectory, nextHeight, nextEntry)) {
+		auto retainedChunkId = height.unwrap() / Files_Per_Directory;
+		auto retainedIndex = height.unwrap() % Files_Per_Directory;
+
+		// 1. Remove all future chunk directories that are completely beyond the retained chunk
+		for (uint64_t chunkId = retainedChunkId + 1; ; ++chunkId) {
+			char subDir[16];
+			SPRINTF(subDir, "%05" PRId64, chunkId);
+			auto futureChunkPath = boost::filesystem::path(m_dataDirectory) / subDir;
+			if (!boost::filesystem::exists(futureChunkPath))
+				break;
+
 			boost::system::error_code ec;
+			boost::filesystem::remove_all(futureChunkPath, ec);
+		}
 
-			// Truncate blocks.dat to nextEntry.blockOffset
-			auto blocksDatPath = GetBlocksDatPath(m_dataDirectory, nextHeight);
-			if (boost::filesystem::is_regular_file(blocksDatPath))
-				boost::filesystem::resize_file(blocksDatPath, nextEntry.blockOffset, ec);
+		// 2. If the retained block is not the very last block in its chunk, truncate the active chunk files
+		if (retainedIndex < Files_Per_Directory - 1) {
+			auto nextHeight = height + Height(1);
+			BlockChunkIndexEntry nextEntry;
+			if (HasChunkIndexEntry(m_dataDirectory, nextHeight, nextEntry)) {
+				boost::system::error_code ec;
 
-			// Truncate statements.dat to the end of the last retained statement within this chunk
-			uint64_t lastRetainedStmtEnd = 0;
-			for (auto h = height; h > Height(0) && (h.unwrap() / Files_Per_Directory == height.unwrap() / Files_Per_Directory); h = h - Height(1)) {
-				BlockChunkIndexEntry retainedEntry;
-				if (HasChunkIndexEntry(m_dataDirectory, h, retainedEntry) && retainedEntry.stmtSize > 0) {
-					lastRetainedStmtEnd = static_cast<uint64_t>(retainedEntry.stmtOffset) + static_cast<uint64_t>(retainedEntry.stmtSize);
-					break;
-				}
-			}
+				// Truncate blocks.dat in the retained chunk
+				auto blocksDatPath = GetBlocksDatPath(m_dataDirectory, height);
+				if (boost::filesystem::is_regular_file(blocksDatPath))
+					boost::filesystem::resize_file(blocksDatPath, nextEntry.blockOffset, ec);
 
-			auto stmtDatPath = GetStatementsDatPath(m_dataDirectory, nextHeight);
-			if (boost::filesystem::is_regular_file(stmtDatPath))
-				boost::filesystem::resize_file(stmtDatPath, lastRetainedStmtEnd, ec);
-
-			// Zero index entries from nextIndex to EOF
-			auto idxPath = GetBlocksIdxPath(m_dataDirectory, nextHeight);
-			if (boost::filesystem::is_regular_file(idxPath)) {
-				auto nextIndex = nextHeight.unwrap() % Files_Per_Directory;
-				auto targetOffset = nextIndex * sizeof(BlockChunkIndexEntry);
-				try {
-					RawFile idxFile(idxPath.generic_string().c_str(), OpenMode::Read_Append, LockMode::None);
-					if (idxFile.size() > targetOffset) {
-						std::vector<uint8_t> zeros(idxFile.size() - targetOffset, 0);
-						idxFile.seek(targetOffset);
-						idxFile.write(zeros);
+				// Truncate statements.dat to the end of the last retained statement in the retained chunk
+				uint64_t lastRetainedStmtEnd = 0;
+				for (auto h = height; h > Height(0) && (h.unwrap() / Files_Per_Directory == retainedChunkId); h = h - Height(1)) {
+					BlockChunkIndexEntry retainedEntry;
+					if (HasChunkIndexEntry(m_dataDirectory, h, retainedEntry) && retainedEntry.stmtSize > 0) {
+						lastRetainedStmtEnd = static_cast<uint64_t>(retainedEntry.stmtOffset) + static_cast<uint64_t>(retainedEntry.stmtSize);
+						break;
 					}
-				} catch (...) {}
+				}
+
+				auto stmtDatPath = GetStatementsDatPath(m_dataDirectory, height);
+				if (boost::filesystem::is_regular_file(stmtDatPath))
+					boost::filesystem::resize_file(stmtDatPath, lastRetainedStmtEnd, ec);
+
+				// Zero index entries from (retainedIndex + 1) to EOF
+				auto idxPath = GetBlocksIdxPath(m_dataDirectory, height);
+				if (boost::filesystem::is_regular_file(idxPath)) {
+					auto targetOffset = (retainedIndex + 1) * sizeof(BlockChunkIndexEntry);
+					try {
+						RawFile idxFile(idxPath.generic_string().c_str(), OpenMode::Read_Append, LockMode::None);
+						if (idxFile.size() > targetOffset) {
+							std::vector<uint8_t> zeros(idxFile.size() - targetOffset, 0);
+							idxFile.seek(targetOffset);
+							idxFile.write(zeros);
+						}
+					} catch (...) {}
+				}
 			}
 		}
 
