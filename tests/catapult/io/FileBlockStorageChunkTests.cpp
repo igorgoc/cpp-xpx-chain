@@ -313,4 +313,72 @@ TEST(TEST_CLASS, DropBlocksAfterPreservesStatementsOfRetainedBlocksWhenNextBlock
 		EXPECT_FALSE(boost::filesystem::exists(chunk1Path)) << "Chunk directory 00001 should have been purged";
 	}
 
+	TEST(TEST_CLASS, DropBlocksAfterRemovesSparseFutureChunkDirectories) {
+		// Arrange: prepare storage seeded at height 10
+		test::TempDirectoryGuard tempDir;
+		test::PrepareStorage(tempDir.name());
+
+		FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+		for (uint32_t i = 1; i <= 10; ++i) {
+			TestBlockElementContext blockCtx(Height(i));
+			storage.saveBlock(blockCtx.get());
+		}
+
+		// Create sparse future chunk directories 00001 and 00003
+		boost::filesystem::path chunk1Path = boost::filesystem::path(tempDir.name()) / "00001";
+		boost::filesystem::path chunk3Path = boost::filesystem::path(tempDir.name()) / "00003";
+		boost::filesystem::create_directories(chunk1Path);
+		boost::filesystem::create_directories(chunk3Path);
+
+		EXPECT_TRUE(boost::filesystem::exists(chunk1Path));
+		EXPECT_TRUE(boost::filesystem::exists(chunk3Path));
+
+		// Act: drop blocks after height 10 (in chunk 00000)
+		storage.dropBlocksAfter(Height(10));
+
+		// Assert: Both 00001 and 00003 are removed despite the gap (00002 was absent)
+		EXPECT_EQ(Height(10), storage.chainHeight());
+		AssertDirectoryExists(tempDir.name(), 0);
+		EXPECT_FALSE(boost::filesystem::exists(chunk1Path));
+		EXPECT_FALSE(boost::filesystem::exists(chunk3Path));
+	}
+
+	TEST(TEST_CLASS, DropBlocksAfterHeightZeroPurgesFutureChunksAndTruncatesChunkZero) {
+		// Arrange: prepare storage with blocks in chunk 0 and chunk 1
+		test::TempDirectoryGuard tempDir;
+		test::PrepareStorage(tempDir.name());
+		test::FakeHeight(tempDir.name(), 65534);
+
+		FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+
+		TestBlockElementContext block65535(Height(65535));
+		storage.saveBlock(block65535.get());
+
+		TestBlockElementContext block65536(Height(65536));
+		storage.saveBlock(block65536.get());
+
+		EXPECT_EQ(Height(65536), storage.chainHeight());
+		AssertDirectoryExists(tempDir.name(), 0);
+		AssertDirectoryExists(tempDir.name(), 1);
+
+		// Act: Rollback to height 0 (logical purge)
+		storage.dropBlocksAfter(Height(0));
+
+		// Assert: Chain height is 0
+		EXPECT_EQ(Height(0), storage.chainHeight());
+
+		// Assert: Chunk 00001 is removed
+		boost::filesystem::path chunk1Path = boost::filesystem::path(tempDir.name()) / "00001";
+		EXPECT_FALSE(boost::filesystem::exists(chunk1Path));
+
+		// Assert: Chunk 00000 files exist and are 0 bytes
+		boost::filesystem::path blocksDatPath = boost::filesystem::path(tempDir.name()) / "00000" / "blocks.dat";
+		boost::filesystem::path stmtDatPath = boost::filesystem::path(tempDir.name()) / "00000" / "statements.dat";
+		boost::filesystem::path idxPath = boost::filesystem::path(tempDir.name()) / "00000" / "blocks.idx";
+
+		EXPECT_EQ(0u, boost::filesystem::file_size(blocksDatPath));
+		EXPECT_EQ(0u, boost::filesystem::file_size(stmtDatPath));
+		EXPECT_EQ(0u, boost::filesystem::file_size(idxPath));
+	}
+
 }}
