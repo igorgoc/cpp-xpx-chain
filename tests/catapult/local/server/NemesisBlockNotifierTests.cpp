@@ -79,7 +79,7 @@ namespace catapult { namespace local {
 		mocks::MockBlockChangeSubscriber subscriber;
 
 		// Act:
-		EXPECT_THROW(context.notifier().raise(subscriber), catapult_runtime_error);
+		EXPECT_NO_THROW(context.notifier().raise(subscriber));
 
 		// Assert:
 		const auto& capturedBlockElements = subscriber.copiedBlockElements();
@@ -93,7 +93,7 @@ namespace catapult { namespace local {
 		mocks::MockBlockChangeSubscriber subscriber;
 
 		// Act:
-		EXPECT_THROW(context.notifier().raise(subscriber), catapult_runtime_error);
+		EXPECT_NO_THROW(context.notifier().raise(subscriber));
 
 		// Assert:
 		const auto& capturedBlockElements = subscriber.copiedBlockElements();
@@ -147,7 +147,7 @@ namespace catapult { namespace local {
 		mocks::MockStateChangeSubscriber subscriber;
 
 		// Act:
-		EXPECT_THROW(context.notifier().raise(subscriber), catapult_runtime_error);
+		EXPECT_NO_THROW(context.notifier().raise(subscriber));
 
 		// Assert:
 		EXPECT_EQ(0u, subscriber.numScoreChanges());

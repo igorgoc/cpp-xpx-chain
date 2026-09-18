@@ -126,9 +126,35 @@ namespace catapult { namespace io {
 			pStorage->saveBlock(element);
 		}
 
-		// - append some data
+		// - append trailing data to blocks.dat and update blocks.idx to include the trailing byte
 		{
-			io::RawFile file(tempDir.name() + "/00000/00002.dat", io::OpenMode::Read_Append);
+			io::RawFile file(tempDir.name() + "/00000/blocks.dat", io::OpenMode::Read_Append);
+			file.seek(file.size());
+			std::vector<uint8_t> buffer{ 42 };
+			file.write(buffer);
+
+			io::RawFile idxFile(tempDir.name() + "/00000/blocks.idx", io::OpenMode::Read_Append);
+			idxFile.seek(2 * sizeof(BlockChunkIndexEntry));
+			BlockChunkIndexEntry entry;
+			idxFile.read(MutableRawBuffer(reinterpret_cast<uint8_t*>(&entry), sizeof(BlockChunkIndexEntry)));
+			entry.blockSize += static_cast<uint32_t>(buffer.size());
+			idxFile.seek(2 * sizeof(BlockChunkIndexEntry));
+			idxFile.write(RawBuffer(reinterpret_cast<const uint8_t*>(&entry), sizeof(BlockChunkIndexEntry)));
+		}
+
+		// Act + Assert
+		FileBlockStorage storage(tempDir.name());
+		EXPECT_THROW(storage.loadBlockElement(Height(2)), catapult_runtime_error);
+	}
+
+	TEST(TEST_CLASS, CannotReadLegacyBlockElementWithTrailingData) {
+		// Arrange: prepare storage with legacy nemesis block 00000/00001.dat
+		test::TempDirectoryGuard tempDir;
+		test::PrepareStorage(tempDir.name());
+
+		// - append some data to the legacy nemesis block file
+		{
+			io::RawFile file(tempDir.name() + "/00000/00001.dat", io::OpenMode::Read_Append);
 			file.seek(file.size());
 			std::vector<uint8_t> buffer{ 42 };
 			file.write(buffer);
@@ -136,7 +162,7 @@ namespace catapult { namespace io {
 
 		// Act + Assert
 		FileBlockStorage storage(tempDir.name());
-		EXPECT_THROW(storage.loadBlockElement(Height(2)), catapult_runtime_error);
+		EXPECT_THROW(storage.loadBlockElement(Height(1)), catapult_runtime_error);
 	}
 
 	// endregion

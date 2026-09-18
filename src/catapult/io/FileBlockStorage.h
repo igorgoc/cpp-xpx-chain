@@ -36,6 +36,16 @@ namespace catapult { namespace io {
 		None
 	};
 
+#pragma pack(push, 1)
+	/// Entry within blocks.idx chunk index file.
+	struct BlockChunkIndexEntry {
+		uint32_t blockOffset;
+		uint32_t blockSize;
+		uint32_t stmtOffset;
+		uint32_t stmtSize;
+	};
+#pragma pack(pop)
+
 	/// File-based block storage.
 	class FileBlockStorage final : public PrunableBlockStorage {
 	public:

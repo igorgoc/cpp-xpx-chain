@@ -54,12 +54,6 @@ namespace catapult { namespace io {
 		static constexpr auto Block_Statement_File_Extension = ".stmt";
 
 #pragma pack(push, 1)
-		struct BlockChunkIndexEntry {
-			uint32_t blockOffset;  // byte offset inside blocks.dat
-			uint32_t blockSize;    // byte length of block element
-			uint32_t stmtOffset;   // byte offset inside statements.dat
-			uint32_t stmtSize;     // byte length of statement (0 if none)
-		};
 
 		struct RollbackJournalHeader {
 			uint32_t magic;           // 0x5349524A ('SIRJ')
@@ -742,6 +736,28 @@ namespace catapult { namespace io {
 	}
 
 	void FileBlockStorage::recoverUnfinishedRollback() {
+		if (!boost::filesystem::exists(m_dataDirectory) || !boost::filesystem::is_directory(m_dataDirectory))
+			return;
+
+		auto journalPath = boost::filesystem::path(m_dataDirectory) / "rollback.journal";
+		bool hasJournal = boost::filesystem::is_regular_file(journalPath);
+		bool hasTmp = false;
+
+		boost::filesystem::directory_iterator endIt;
+		for (boost::filesystem::directory_iterator it(m_dataDirectory); it != endIt; ++it) {
+			if (boost::filesystem::is_regular_file(it->path())) {
+				auto filename = it->path().filename().string();
+				if (filename == "rollback.journal.tmp" ||
+					(filename.rfind("rollback.journal.", 0) == 0 && filename.length() >= 4 && filename.rfind(".tmp") == filename.length() - 4)) {
+					hasTmp = true;
+					break;
+				}
+			}
+		}
+
+		if (!hasJournal && !hasTmp)
+			return;
+
 		std::lock_guard<std::mutex> lock(m_rollbackMutex);
 		RollbackLockGuard fileLock(m_dataDirectory);
 
@@ -762,7 +778,6 @@ namespace catapult { namespace io {
 			}
 		}
 
-		auto journalPath = boost::filesystem::path(m_dataDirectory) / "rollback.journal";
 		if (!boost::filesystem::is_regular_file(journalPath))
 			return;
 
@@ -839,6 +854,11 @@ namespace catapult { namespace io {
 			CATAPULT_THROW_FILE_IO_ERROR("rollback already in progress; recover rollback.journal first");
 
 		auto currentHeight = chainHeight();
+		if (Height(0) == currentHeight && Height(0) != height) {
+			m_indexFile.set(height.unwrap());
+			return;
+		}
+
 		if (height >= currentHeight && Height(0) != height)
 			return;
 
@@ -966,6 +986,9 @@ namespace catapult { namespace io {
 			BufferInputStreamAdapter streamAdapter(blockBuffer);
 			auto pBlockElement = ReadBlockElement(streamAdapter);
 
+			if (streamAdapter.position() != blockBuffer.size())
+				CATAPULT_THROW_RUNTIME_ERROR_1("additional data after block at height", height);
+
 			if (entry.stmtSize > 0) {
 				auto stmtDatPath = GetStatementsDatPath(m_dataDirectory, height);
 				RawFile stmtFile(stmtDatPath.generic_string().c_str(), OpenMode::Read_Only, LockMode::None);
@@ -977,6 +1000,10 @@ namespace catapult { namespace io {
 				BufferInputStreamAdapter stmtStream(stmtBuffer);
 				auto pBlockStatement = std::make_shared<model::BlockStatement>();
 				ReadBlockStatement(stmtStream, *pBlockStatement);
+
+				if (stmtStream.position() != stmtBuffer.size())
+					CATAPULT_THROW_RUNTIME_ERROR_1("additional data after block statement at height", height);
+
 				const_cast<model::BlockElement&>(*pBlockElement).OptionalStatement = std::move(pBlockStatement);
 			}
 

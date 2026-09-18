@@ -46,12 +46,6 @@ namespace {
 	constexpr uint32_t Files_Per_Directory = 65536u;
 
 #pragma pack(push, 1)
-	struct BlockChunkIndexEntry {
-		uint32_t blockOffset;
-		uint32_t blockSize;
-		uint32_t stmtOffset;
-		uint32_t stmtSize;
-	};
 
 	struct RollbackJournalHeader {
 		uint32_t magic;
