@@ -503,4 +503,55 @@ TEST(TEST_CLASS, DropBlocksAfterPreservesStatementsOfRetainedBlocksWhenNextBlock
 		EXPECT_EQ(Height(5), pBlock5->Block.Height);
 	}
 
+#ifndef _WIN32
+	TEST(TEST_CLASS, RecoverUnfinishedRollbackPreservesJournalOnFailure) {
+		if (geteuid() == 0)
+			return; // Skip if running as root where filesystem permissions checks are bypassed
+
+		// Arrange: prepare storage seeded with 10 blocks in chunk 0
+		test::TempDirectoryGuard tempDir;
+		test::PrepareStorage(tempDir.name());
+
+		{
+			FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+			for (uint32_t i = 1; i <= 10; ++i) {
+				TestBlockElementContext blockCtx(Height(i));
+				storage.saveBlock(blockCtx.get());
+			}
+			EXPECT_EQ(Height(10), storage.chainHeight());
+		}
+
+		// Write mock rollback.journal targeting height 5
+		RollbackJournalHeader journalHeader;
+		journalHeader.magic = Rollback_Journal_Magic;
+		journalHeader.version = Rollback_Journal_Version;
+		journalHeader.targetHeight = 5;
+		journalHeader.previousHeight = 10;
+		journalHeader.targetBlockEnd = 100;
+		journalHeader.targetStmtEnd = 0;
+		journalHeader.targetIndex = 6;
+		journalHeader.padding = 0;
+
+		boost::filesystem::path journalPath = boost::filesystem::path(tempDir.name()) / "rollback.journal";
+		{
+			RawFile journalFile(journalPath.generic_string().c_str(), OpenMode::Read_Write, LockMode::None);
+			journalFile.write(RawBuffer(reinterpret_cast<const uint8_t*>(&journalHeader), sizeof(RollbackJournalHeader)));
+		}
+		EXPECT_TRUE(boost::filesystem::exists(journalPath));
+
+		// Make blocks.idx in chunk 00000 read-only to force ApplyRollbackOperations to fail during recovery
+		boost::filesystem::path idxPath = boost::filesystem::path(tempDir.name()) / "00000" / "blocks.idx";
+		boost::filesystem::permissions(idxPath, boost::filesystem::perms::owner_read);
+
+		// Act & Assert: Opening storage fails during recovery
+		EXPECT_THROW(FileBlockStorage(tempDir.name(), FileBlockStorageMode::Hash_Index), catapult_file_io_error);
+
+		// Restore permissions for assertions and clean teardown
+		boost::filesystem::permissions(idxPath, boost::filesystem::perms::owner_all);
+
+		// Assert: rollback.journal was NOT deleted on failed recovery
+		EXPECT_TRUE(boost::filesystem::exists(journalPath)) << "rollback.journal must be preserved on recovery failure";
+	}
+#endif
+
 }}

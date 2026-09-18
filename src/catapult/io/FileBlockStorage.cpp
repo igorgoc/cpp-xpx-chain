@@ -258,6 +258,21 @@ namespace catapult { namespace io {
 			}
 		}
 
+		void WriteRollbackJournal(const std::string& dataDirectory, const RollbackJournalHeader& header) {
+			auto journalTmpPath = boost::filesystem::path(dataDirectory) / "rollback.journal.tmp";
+			auto journalPath = boost::filesystem::path(dataDirectory) / "rollback.journal";
+
+			{
+				RawFile journalFile(journalTmpPath.generic_string().c_str(), OpenMode::Read_Write, LockMode::None);
+				journalFile.write(RawBuffer(reinterpret_cast<const uint8_t*>(&header), sizeof(RollbackJournalHeader)));
+			}
+
+			boost::system::error_code ec;
+			boost::filesystem::rename(journalTmpPath, journalPath, ec);
+			if (ec)
+				CATAPULT_THROW_FILE_IO_ERROR(("failed to atomically create rollback.journal: " + ec.message()).c_str());
+		}
+
 		// endregion
 	}
 
@@ -448,19 +463,35 @@ namespace catapult { namespace io {
 		if (!boost::filesystem::is_regular_file(journalPath))
 			return;
 
-		try {
+		RollbackJournalHeader header;
+		{
 			RawFile journalFile(journalPath.generic_string().c_str(), OpenMode::Read_Only, LockMode::None);
-			if (journalFile.size() >= sizeof(RollbackJournalHeader)) {
-				RollbackJournalHeader header;
-				journalFile.read(MutableRawBuffer(reinterpret_cast<uint8_t*>(&header), sizeof(RollbackJournalHeader)));
-				if (header.magic == Rollback_Journal_Magic && header.version == Rollback_Journal_Version) {
-					ApplyRollbackOperations(m_dataDirectory, header, m_indexFile);
-				}
-			}
-		} catch (...) {}
+			if (journalFile.size() != sizeof(RollbackJournalHeader))
+				CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: invalid header size");
+
+			journalFile.read(MutableRawBuffer(reinterpret_cast<uint8_t*>(&header), sizeof(RollbackJournalHeader)));
+		}
+
+		if (header.magic != Rollback_Journal_Magic || header.version != Rollback_Journal_Version)
+			CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: invalid magic or version");
+
+		if (header.targetHeight > header.previousHeight)
+			CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: targetHeight is greater than previousHeight");
+
+		if (header.targetIndex > Files_Per_Directory)
+			CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: targetIndex exceeds directory capacity");
+
+		auto currentHeight = m_indexFile.exists() ? m_indexFile.get() : 0;
+		if (currentHeight != header.previousHeight && currentHeight != header.targetHeight)
+			CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: index.dat height does not match journal state");
+
+		// Apply rollback operations. If an error occurs, it throws and preserves rollback.journal.
+		ApplyRollbackOperations(m_dataDirectory, header, m_indexFile);
 
 		boost::system::error_code ec;
 		boost::filesystem::remove(journalPath, ec);
+		if (ec)
+			CATAPULT_THROW_FILE_IO_ERROR(("failed to remove rollback.journal after recovery: " + ec.message()).c_str());
 	}
 
 	// endregion
@@ -543,18 +574,17 @@ namespace catapult { namespace io {
 		}
 
 		// 1. Durably write rollback journal header before modifying any files
-		auto journalPath = boost::filesystem::path(m_dataDirectory) / "rollback.journal";
-		{
-			RawFile journalFile(journalPath.generic_string().c_str(), OpenMode::Read_Write, LockMode::None);
-			journalFile.write(RawBuffer(reinterpret_cast<const uint8_t*>(&header), sizeof(RollbackJournalHeader)));
-		}
+		WriteRollbackJournal(m_dataDirectory, header);
 
 		// 2. Apply all file truncations, height commit, and directory purges
 		ApplyRollbackOperations(m_dataDirectory, header, m_indexFile);
 
 		// 3. Remove rollback journal after successful completion
+		auto journalPath = boost::filesystem::path(m_dataDirectory) / "rollback.journal";
 		boost::system::error_code ec;
 		boost::filesystem::remove(journalPath, ec);
+		if (ec)
+			CATAPULT_THROW_FILE_IO_ERROR(("failed to remove rollback.journal: " + ec.message()).c_str());
 	}
 
 	// endregion
