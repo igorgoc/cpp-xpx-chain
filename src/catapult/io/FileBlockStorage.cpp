@@ -82,9 +82,6 @@ namespace catapult { namespace io {
 			SPRINTF(subDirectory, "%05" PRId64, height.unwrap() / Files_Per_Directory);
 			boost::filesystem::path path = baseDirectory;
 			path /= subDirectory;
-			if (!boost::filesystem::exists(path))
-				boost::filesystem::create_directory(path);
-
 			return path;
 		}
 
@@ -289,8 +286,10 @@ namespace catapult { namespace io {
 				CATAPULT_THROW_FILE_IO_ERROR("failed to write complete rollback.journal.tmp");
 			}
 			HANDLE h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
-			if (h != INVALID_HANDLE_VALUE)
-				FlushFileBuffers(h);
+			if (h == INVALID_HANDLE_VALUE || !FlushFileBuffers(h)) {
+				_close(fd);
+				CATAPULT_THROW_FILE_IO_ERROR("failed to flush rollback.journal.tmp to disk");
+			}
 			_close(fd);
 #else
 			int fd = ::open(journalTmpPath.generic_string().c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
@@ -301,7 +300,10 @@ namespace catapult { namespace io {
 				::close(fd);
 				CATAPULT_THROW_FILE_IO_ERROR("failed to write complete rollback.journal.tmp");
 			}
-			::fsync(fd);
+			if (::fsync(fd) != 0) {
+				::close(fd);
+				CATAPULT_THROW_FILE_IO_ERROR("failed to fsync rollback.journal.tmp to disk");
+			}
 			::close(fd);
 #endif
 
@@ -313,7 +315,10 @@ namespace catapult { namespace io {
 #ifndef _WIN32
 			int dirFd = ::open(dataDirectory.c_str(), O_RDONLY | O_DIRECTORY);
 			if (dirFd != -1) {
-				::fsync(dirFd);
+				if (::fsync(dirFd) != 0) {
+					::close(dirFd);
+					CATAPULT_THROW_FILE_IO_ERROR("failed to fsync data directory for rollback.journal");
+				}
 				::close(dirFd);
 			}
 #endif
@@ -331,6 +336,12 @@ namespace catapult { namespace io {
 
 	namespace {
 		std::unique_ptr<RawFile> OpenHashFile(const std::string& baseDirectory, Height height, OpenMode openMode) {
+			if (openMode != OpenMode::Read_Only) {
+				auto dirPath = GetDirectoryPath(baseDirectory, height);
+				if (!boost::filesystem::exists(dirPath))
+					boost::filesystem::create_directories(dirPath);
+			}
+
 			auto hashFilePath = GetHashFilePath(baseDirectory, height);
 			auto pHashFile = std::make_unique<RawFile>(hashFilePath.generic_string().c_str(), openMode, LockMode::None);
 			// check that first hash file has at least two hashes inside.
@@ -416,6 +427,10 @@ namespace catapult { namespace io {
 		auto currentId = height.unwrap() / Files_Per_Directory;
 		if (m_cachedDirectoryId != currentId || !m_pCachedBlocksFile) {
 			reset();
+			auto dirPath = GetDirectoryPath(m_dataDirectory, height);
+			if (!boost::filesystem::exists(dirPath))
+				boost::filesystem::create_directories(dirPath);
+
 			auto blocksDatPath = GetBlocksDatPath(m_dataDirectory, height);
 			m_pCachedBlocksFile = std::make_unique<RawFile>(blocksDatPath.generic_string().c_str(), OpenMode::Read_Append, LockMode::None);
 
@@ -531,6 +546,23 @@ namespace catapult { namespace io {
 		auto currentHeight = m_indexFile.exists() ? m_indexFile.get() : 0;
 		if (currentHeight != header.previousHeight && currentHeight != header.targetHeight)
 			CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: index.dat height does not match journal state");
+
+		// If targetHeight > 0, validate target offsets against physical files before executing
+		if (header.targetHeight > 0) {
+			auto blocksDatPath = GetBlocksDatPath(m_dataDirectory, Height(header.targetHeight));
+			if (boost::filesystem::is_regular_file(blocksDatPath)) {
+				auto currentBlocksSize = boost::filesystem::file_size(blocksDatPath);
+				if (header.targetBlockEnd > currentBlocksSize)
+					CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: targetBlockEnd exceeds actual blocks.dat size");
+			}
+
+			auto stmtDatPath = GetStatementsDatPath(m_dataDirectory, Height(header.targetHeight));
+			if (boost::filesystem::is_regular_file(stmtDatPath)) {
+				auto currentStmtSize = boost::filesystem::file_size(stmtDatPath);
+				if (header.targetStmtEnd > currentStmtSize)
+					CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: targetStmtEnd exceeds actual statements.dat size");
+			}
+		}
 
 		// Apply rollback operations. If an error occurs, it throws and preserves rollback.journal.
 		ApplyRollbackOperations(m_dataDirectory, header, m_indexFile);
