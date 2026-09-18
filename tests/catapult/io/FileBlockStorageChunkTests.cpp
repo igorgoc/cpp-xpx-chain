@@ -861,4 +861,76 @@ TEST(TEST_CLASS, DropBlocksAfterPreservesStatementsOfRetainedBlocksWhenNextBlock
 		EXPECT_FALSE(boost::filesystem::exists(journalPath));
 	}
 
+	TEST(TEST_CLASS, DropBlocksAfterThrowsIfRollbackJournalAlreadyExists) {
+		// Arrange: prepare storage seeded with 10 blocks in chunk 0
+		test::TempDirectoryGuard tempDir;
+		test::PrepareStorage(tempDir.name());
+
+		{
+			FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+			storage.dropBlocksAfter(Height(0));
+			for (uint32_t i = 1; i <= 10; ++i) {
+				TestBlockElementContext blockCtx((Height(i)));
+				storage.saveBlock(blockCtx.get());
+			}
+			EXPECT_EQ(Height(10), storage.chainHeight());
+		}
+
+		FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+
+		// Create mock rollback.journal with distinctive payload
+		boost::filesystem::path journalPath = boost::filesystem::path(tempDir.name()) / "rollback.journal";
+		std::vector<uint8_t> originalJournalPayload(sizeof(RollbackJournalHeader), 0xAB);
+		{
+			RawFile journalFile(journalPath.generic_string().c_str(), OpenMode::Read_Write, LockMode::None);
+			journalFile.write(originalJournalPayload);
+		}
+		EXPECT_TRUE(boost::filesystem::exists(journalPath));
+
+		// Act & Assert: dropBlocksAfter must reject operation and throw file IO error
+		EXPECT_THROW(storage.dropBlocksAfter(Height(5)), catapult_file_io_error);
+
+		// Assert: chain height remains 10
+		EXPECT_EQ(Height(10), storage.chainHeight());
+
+		// Assert: existing rollback.journal was NOT overwritten or deleted
+		EXPECT_TRUE(boost::filesystem::exists(journalPath));
+		{
+			RawFile journalFile(journalPath.generic_string().c_str(), OpenMode::Read_Only, LockMode::None);
+			std::vector<uint8_t> readPayload(sizeof(RollbackJournalHeader), 0);
+			journalFile.read(readPayload);
+			EXPECT_EQ(originalJournalPayload, readPayload);
+		}
+	}
+
+	TEST(TEST_CLASS, DropBlocksAfterThrowsIfRollbackJournalAlreadyExistsEvenIfHeightMatches) {
+		// Arrange: prepare storage seeded with 10 blocks in chunk 0
+		test::TempDirectoryGuard tempDir;
+		test::PrepareStorage(tempDir.name());
+
+		{
+			FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+			storage.dropBlocksAfter(Height(0));
+			for (uint32_t i = 1; i <= 10; ++i) {
+				TestBlockElementContext blockCtx((Height(i)));
+				storage.saveBlock(blockCtx.get());
+			}
+			EXPECT_EQ(Height(10), storage.chainHeight());
+		}
+
+		FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+
+		// Create mock rollback.journal
+		boost::filesystem::path journalPath = boost::filesystem::path(tempDir.name()) / "rollback.journal";
+		{
+			RawFile journalFile(journalPath.generic_string().c_str(), OpenMode::Read_Write, LockMode::None);
+			std::vector<uint8_t> payload(sizeof(RollbackJournalHeader), 0xCD);
+			journalFile.write(payload);
+		}
+
+		// Act & Assert: dropBlocksAfter(Height(10)) or greater must still throw instead of early returning
+		EXPECT_THROW(storage.dropBlocksAfter(Height(10)), catapult_file_io_error);
+		EXPECT_THROW(storage.dropBlocksAfter(Height(15)), catapult_file_io_error);
+	}
+
 }}
