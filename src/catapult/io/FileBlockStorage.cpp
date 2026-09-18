@@ -390,28 +390,25 @@ namespace catapult { namespace io {
 		auto retainedChunkId = (Height(0) == height) ? 0 : (height.unwrap() / Files_Per_Directory);
 		auto retainedIndex = (Height(0) == height) ? 0 : (height.unwrap() % Files_Per_Directory);
 
-		// 1. Enumerate and remove all chunk directories that are strictly beyond the retained chunk
-		// (If height == 0, removes all chunk directories >= 1, and chunk 00000 is cleaned below)
+		// 1. Collect all future chunk directories beyond the retained chunk without mutating during iteration
+		std::vector<boost::filesystem::path> futureChunkPaths;
 		if (boost::filesystem::exists(m_dataDirectory) && boost::filesystem::is_directory(m_dataDirectory)) {
 			boost::filesystem::directory_iterator endIt;
 			for (boost::filesystem::directory_iterator it(m_dataDirectory); it != endIt; ++it) {
 				if (boost::filesystem::is_directory(it->path())) {
 					uint64_t chunkId = 0;
 					if (TryGetChunkId(it->path(), chunkId)) {
-						if (chunkId > retainedChunkId) {
-							boost::system::error_code ec;
-							boost::filesystem::remove_all(it->path(), ec);
-							if (ec)
-								CATAPULT_THROW_FILE_IO_ERROR(("failed to remove future chunk directory: " + it->path().string() + ": " + ec.message()).c_str());
-						}
+						if (chunkId > retainedChunkId)
+							futureChunkPaths.push_back(it->path());
 					}
 				}
 			}
 		}
 
-		// 2. Clean/truncate within the retained chunk
+		// 2. Clean / truncate within the active retained chunk
 		if (Height(0) == height) {
-			// Height 0 reset: truncate files in chunk 00000 to 0
+			// Height 0 reset: truncate blocks/statements/index in chunk 00000 to 0 bytes.
+			// Note: 00000/hashes.dat is preserved (minimum 64 bytes for genesis) as hash loading is bounded by index.dat.
 			boost::system::error_code ec;
 			auto blocksDatPath = GetBlocksDatPath(m_dataDirectory, Height(0));
 			if (boost::filesystem::is_regular_file(blocksDatPath)) {
@@ -482,8 +479,16 @@ namespace catapult { namespace io {
 			}
 		}
 
-		// 3. Commit updated height to index.dat only after all file/directory operations succeed
+		// 3. Commit updated height to index.dat
 		m_indexFile.set(height.unwrap());
+
+		// 4. Purge future chunk directories only after height has been safely committed
+		for (const auto& path : futureChunkPaths) {
+			boost::system::error_code ec;
+			boost::filesystem::remove_all(path, ec);
+			if (ec)
+				CATAPULT_THROW_FILE_IO_ERROR(("failed to remove future chunk directory: " + path.string() + ": " + ec.message()).c_str());
+		}
 	}
 
 	// endregion

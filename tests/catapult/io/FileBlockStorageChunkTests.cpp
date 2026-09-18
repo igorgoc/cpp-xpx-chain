@@ -25,6 +25,9 @@
 #include "tests/test/nodeps/Filesystem.h"
 #include "tests/TestHarness.h"
 #include <boost/filesystem.hpp>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 namespace catapult { namespace io {
 
@@ -380,5 +383,46 @@ TEST(TEST_CLASS, DropBlocksAfterPreservesStatementsOfRetainedBlocksWhenNextBlock
 		EXPECT_EQ(0u, boost::filesystem::file_size(stmtDatPath));
 		EXPECT_EQ(0u, boost::filesystem::file_size(idxPath));
 	}
+
+#ifndef _WIN32
+	TEST(TEST_CLASS, DropBlocksAfterFailurePreservesFutureChunksAndChainHeight) {
+		if (geteuid() == 0)
+			return; // Skip if running as root where filesystem permissions checks are bypassed
+
+		// Arrange: prepare storage with blocks in chunk 0 and chunk 1
+		test::TempDirectoryGuard tempDir;
+		test::PrepareStorage(tempDir.name());
+		test::FakeHeight(tempDir.name(), 65534);
+
+		FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+
+		TestBlockElementContext block65535(Height(65535));
+		storage.saveBlock(block65535.get());
+
+		TestBlockElementContext block65536(Height(65536));
+		storage.saveBlock(block65536.get());
+
+		EXPECT_EQ(Height(65536), storage.chainHeight());
+		AssertDirectoryExists(tempDir.name(), 0);
+		AssertDirectoryExists(tempDir.name(), 1);
+
+		// Make blocks.idx in chunk 00000 read-only so modifying it during rollback throws
+		boost::filesystem::path idxPath = boost::filesystem::path(tempDir.name()) / "00000" / "blocks.idx";
+		boost::filesystem::permissions(idxPath, boost::filesystem::perms::owner_read);
+
+		// Act & Assert: dropBlocksAfter to height 65534 throws because blocks.idx cannot be modified
+		EXPECT_THROW(storage.dropBlocksAfter(Height(65534)), catapult_file_io_error);
+
+		// Restore permissions for assertion and clean tempDir teardown
+		boost::filesystem::permissions(idxPath, boost::filesystem::perms::owner_all);
+
+		// Assert: Chunk 00001 is NOT destroyed because rollback failed before committing height
+		boost::filesystem::path chunk1Path = boost::filesystem::path(tempDir.name()) / "00001";
+		EXPECT_TRUE(boost::filesystem::exists(chunk1Path));
+
+		// Assert: Logical chain height remains unchanged
+		EXPECT_EQ(Height(65536), storage.chainHeight());
+	}
+#endif
 
 }}
