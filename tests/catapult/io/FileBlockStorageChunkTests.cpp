@@ -20,6 +20,7 @@
 
 #include "catapult/io/FileBlockStorage.h"
 #include "catapult/io/RawFile.h"
+#include "tests/test/core/BlockStatementTestUtils.h"
 #include "tests/test/core/BlockTestUtils.h"
 #include "tests/test/core/StorageTestUtils.h"
 #include "tests/test/nodeps/Filesystem.h"
@@ -67,7 +68,7 @@ namespace {
 		explicit TestBlockElementContext(Height height)
 			: pBlock(test::GenerateBlockWithTransactions(0, height))
 			, pElement(std::make_unique<model::BlockElement>(*pBlock)) {
-			pElement->EntityHash = test::GenerateRandomByteArray<Hash256_Size>();
+			pElement->EntityHash = test::GenerateRandomByteArray<Hash256>();
 		}
 
 		const model::BlockElement& get() const {
@@ -97,16 +98,16 @@ TEST(TEST_CLASS, CanWriteBlocksAcrossChunkBoundary) {
 	// Arrange: prepare storage seeded at height 65534
 	test::TempDirectoryGuard tempDir;
 	test::PrepareStorage(tempDir.name());
-	test::FakeHeight(tempDir.name(), 65534);
+	test::FakeHeight(tempDir.name(), 65535);
 
 	FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
 
 	// Act: Write block at height 65535 (last in chunk 0)
-	TestBlockElementContext block65535(Height(65535));
+	TestBlockElementContext block65535((Height(65535)));
 	storage.saveBlock(block65535.get());
 
 	// Act: Write block at height 65536 (first in chunk 1)
-	TestBlockElementContext block65536(Height(65536));
+	TestBlockElementContext block65536((Height(65536)));
 	storage.saveBlock(block65536.get());
 
 	// Assert: Verify directories and files exist for both chunks (00000 and 00001)
@@ -128,10 +129,11 @@ TEST(TEST_CLASS, BlockChunkIndexEntryMatchesBinaryLayout) {
 	test::PrepareStorage(tempDir.name());
 
 	FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+	storage.dropBlocksAfter(Height(0));
 
 	// Act: Write blocks sequentially from height 1 to 5
 	for (uint32_t i = 1; i <= 5; ++i) {
-		TestBlockElementContext blockCtx(Height(i));
+		TestBlockElementContext blockCtx((Height(i)));
 		storage.saveBlock(blockCtx.get());
 	}
 
@@ -167,10 +169,11 @@ TEST(TEST_CLASS, DropBlocksAfterTruncatesFilesAndZerosIndex) {
 	test::PrepareStorage(tempDir.name());
 
 	FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+	storage.dropBlocksAfter(Height(0));
 
 	constexpr uint32_t NumBlocks = 20;
 	for (uint32_t i = 1; i <= NumBlocks; ++i) {
-		TestBlockElementContext blockCtx(Height(i));
+		TestBlockElementContext blockCtx((Height(i)));
 		storage.saveBlock(blockCtx.get());
 	}
 
@@ -219,20 +222,20 @@ TEST(TEST_CLASS, DropBlocksAfterPreservesStatementsOfRetainedBlocksWhenNextBlock
 		test::PrepareStorage(tempDir.name());
 
 		FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+		storage.dropBlocksAfter(Height(0));
 
 		// Block 1 with Statement
-		TestBlockElementContext block1(Height(1));
-		auto pStatement1 = std::make_shared<model::BlockStatement>();
-		pStatement1->Receipts.emplace(model::ReceiptSource(), std::make_unique<model::Receipt>(model::ReceiptType::Mosaic_Levy, model::ReceiptVersion(1)));
-		const_cast<model::BlockElement&>(block1.get()).OptionalStatement = pStatement1;
+		TestBlockElementContext block1((Height(1)));
+		auto pStatement1 = test::GenerateRandomStatements({ 1, 0, 0, 0 });
+		const_cast<model::BlockElement&>(block1.get()).OptionalStatement = std::move(pStatement1);
 		storage.saveBlock(block1.get());
 
 		// Block 2 WITHOUT Statement
-		TestBlockElementContext block2(Height(2));
+		TestBlockElementContext block2((Height(2)));
 		storage.saveBlock(block2.get());
 
 		// Block 3 WITHOUT Statement
-		TestBlockElementContext block3(Height(3));
+		TestBlockElementContext block3((Height(3)));
 		storage.saveBlock(block3.get());
 
 		// Act: Rollback to block 1
@@ -245,7 +248,7 @@ TEST(TEST_CLASS, DropBlocksAfterPreservesStatementsOfRetainedBlocksWhenNextBlock
 
 		auto pLoadedBlock1 = storage.loadBlockElement(Height(1));
 		EXPECT_TRUE(pLoadedBlock1->OptionalStatement != nullptr);
-		EXPECT_EQ(1u, pLoadedBlock1->OptionalStatement->Receipts.size());
+		EXPECT_EQ(1u, pLoadedBlock1->OptionalStatement->TransactionStatements.size());
 	}
 
 	TEST(TEST_CLASS, DropBlocksAfterTruncatesStatementsToZeroWhenAllRetainedBlocksHaveNoStatement) {
@@ -254,16 +257,16 @@ TEST(TEST_CLASS, DropBlocksAfterPreservesStatementsOfRetainedBlocksWhenNextBlock
 		test::PrepareStorage(tempDir.name());
 
 		FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+		storage.dropBlocksAfter(Height(0));
 
 		// Block 1 WITHOUT Statement
-		TestBlockElementContext block1(Height(1));
+		TestBlockElementContext block1((Height(1)));
 		storage.saveBlock(block1.get());
 
 		// Block 2 WITH Statement
-		TestBlockElementContext block2(Height(2));
-		auto pStatement2 = std::make_shared<model::BlockStatement>();
-		pStatement2->Receipts.emplace(model::ReceiptSource(), std::make_unique<model::Receipt>(model::ReceiptType::Mosaic_Levy, model::ReceiptVersion(1)));
-		const_cast<model::BlockElement&>(block2.get()).OptionalStatement = pStatement2;
+		TestBlockElementContext block2((Height(2)));
+		auto pStatement2 = test::GenerateRandomStatements({ 1, 0, 0, 0 });
+		const_cast<model::BlockElement&>(block2.get()).OptionalStatement = std::move(pStatement2);
 		storage.saveBlock(block2.get());
 
 		// Act: Rollback to block 1
@@ -286,22 +289,20 @@ TEST(TEST_CLASS, DropBlocksAfterPreservesStatementsOfRetainedBlocksWhenNextBlock
 		// Arrange: prepare storage seeded at height 65534
 		test::TempDirectoryGuard tempDir;
 		test::PrepareStorage(tempDir.name());
-		test::FakeHeight(tempDir.name(), 65534);
+		test::FakeHeight(tempDir.name(), 65535);
 
 		FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
 
 		// Block 65535 in chunk 00000 with Statement
-		TestBlockElementContext block65535(Height(65535));
-		auto pStatement65535 = std::make_shared<model::BlockStatement>();
-		pStatement65535->Receipts.emplace(model::ReceiptSource(), std::make_unique<model::Receipt>(model::ReceiptType::Mosaic_Levy, model::ReceiptVersion(1)));
-		const_cast<model::BlockElement&>(block65535.get()).OptionalStatement = pStatement65535;
+		TestBlockElementContext block65535((Height(65535)));
+		auto pStatement65535 = test::GenerateRandomStatements({ 1, 0, 0, 0 });
+		const_cast<model::BlockElement&>(block65535.get()).OptionalStatement = std::move(pStatement65535);
 		storage.saveBlock(block65535.get());
 
 		// Block 65536 in chunk 00001 with Statement
-		TestBlockElementContext block65536(Height(65536));
-		auto pStatement65536 = std::make_shared<model::BlockStatement>();
-		pStatement65536->Receipts.emplace(model::ReceiptSource(), std::make_unique<model::Receipt>(model::ReceiptType::Mosaic_Levy, model::ReceiptVersion(1)));
-		const_cast<model::BlockElement&>(block65536.get()).OptionalStatement = pStatement65536;
+		TestBlockElementContext block65536((Height(65536)));
+		auto pStatement65536 = test::GenerateRandomStatements({ 1, 0, 0, 0 });
+		const_cast<model::BlockElement&>(block65536.get()).OptionalStatement = std::move(pStatement65536);
 		storage.saveBlock(block65536.get());
 
 		// Assert both chunks exist before rollback
@@ -322,7 +323,7 @@ TEST(TEST_CLASS, DropBlocksAfterPreservesStatementsOfRetainedBlocksWhenNextBlock
 
 		auto pLoadedBlock = storage.loadBlockElement(Height(65535));
 		EXPECT_TRUE(pLoadedBlock->OptionalStatement != nullptr);
-		EXPECT_EQ(1u, pLoadedBlock->OptionalStatement->Receipts.size());
+		EXPECT_EQ(1u, pLoadedBlock->OptionalStatement->TransactionStatements.size());
 
 		// Assert: Chunk 00001 is completely removed
 		boost::filesystem::path chunk1Path = tempDir.name();
@@ -336,8 +337,9 @@ TEST(TEST_CLASS, DropBlocksAfterPreservesStatementsOfRetainedBlocksWhenNextBlock
 		test::PrepareStorage(tempDir.name());
 
 		FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
-		for (uint32_t i = 1; i <= 10; ++i) {
-			TestBlockElementContext blockCtx(Height(i));
+		storage.dropBlocksAfter(Height(0));
+		for (uint32_t i = 1; i <= 11; ++i) {
+			TestBlockElementContext blockCtx((Height(i)));
 			storage.saveBlock(blockCtx.get());
 		}
 
@@ -364,14 +366,14 @@ TEST(TEST_CLASS, DropBlocksAfterPreservesStatementsOfRetainedBlocksWhenNextBlock
 		// Arrange: prepare storage with blocks in chunk 0 and chunk 1
 		test::TempDirectoryGuard tempDir;
 		test::PrepareStorage(tempDir.name());
-		test::FakeHeight(tempDir.name(), 65534);
+		test::FakeHeight(tempDir.name(), 65535);
 
 		FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
 
-		TestBlockElementContext block65535(Height(65535));
+		TestBlockElementContext block65535((Height(65535)));
 		storage.saveBlock(block65535.get());
 
-		TestBlockElementContext block65536(Height(65536));
+		TestBlockElementContext block65536((Height(65536)));
 		storage.saveBlock(block65536.get());
 
 		EXPECT_EQ(Height(65536), storage.chainHeight());
@@ -403,39 +405,42 @@ TEST(TEST_CLASS, DropBlocksAfterPreservesStatementsOfRetainedBlocksWhenNextBlock
 		if (geteuid() == 0)
 			return; // Skip if running as root where filesystem permissions checks are bypassed
 
-		// Arrange: prepare storage with blocks in chunk 0 and chunk 1
+		// Arrange: prepare storage with 10 blocks in chunk 0
 		test::TempDirectoryGuard tempDir;
 		test::PrepareStorage(tempDir.name());
-		test::FakeHeight(tempDir.name(), 65534);
 
-		FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+		{
+			FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+			storage.dropBlocksAfter(Height(0));
+			for (uint32_t i = 1; i <= 10; ++i) {
+				TestBlockElementContext blockCtx((Height(i)));
+				storage.saveBlock(blockCtx.get());
+			}
+			EXPECT_EQ(Height(10), storage.chainHeight());
+		}
 
-		TestBlockElementContext block65535(Height(65535));
-		storage.saveBlock(block65535.get());
-
-		TestBlockElementContext block65536(Height(65536));
-		storage.saveBlock(block65536.get());
-
-		EXPECT_EQ(Height(65536), storage.chainHeight());
-		AssertDirectoryExists(tempDir.name(), 0);
-		AssertDirectoryExists(tempDir.name(), 1);
+		// Create dummy future chunk 00001
+		boost::filesystem::path chunk1Path = boost::filesystem::path(tempDir.name()) / "00001";
+		boost::filesystem::create_directories(chunk1Path);
+		EXPECT_TRUE(boost::filesystem::exists(chunk1Path));
 
 		// Make blocks.idx in chunk 00000 read-only so modifying it during rollback throws
 		boost::filesystem::path idxPath = boost::filesystem::path(tempDir.name()) / "00000" / "blocks.idx";
 		boost::filesystem::permissions(idxPath, boost::filesystem::perms::owner_read);
 
-		// Act & Assert: dropBlocksAfter to height 65534 throws because blocks.idx cannot be modified
-		EXPECT_THROW(storage.dropBlocksAfter(Height(65534)), catapult_file_io_error);
+		FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+
+		// Act & Assert: dropBlocksAfter to height 5 throws because blocks.idx cannot be modified
+		EXPECT_THROW(storage.dropBlocksAfter(Height(5)), catapult_file_io_error);
 
 		// Restore permissions for assertion and clean tempDir teardown
 		boost::filesystem::permissions(idxPath, boost::filesystem::perms::owner_all);
 
 		// Assert: Chunk 00001 is NOT destroyed because rollback failed before committing height
-		boost::filesystem::path chunk1Path = boost::filesystem::path(tempDir.name()) / "00001";
 		EXPECT_TRUE(boost::filesystem::exists(chunk1Path));
 
 		// Assert: Logical chain height remains unchanged
-		EXPECT_EQ(Height(65536), storage.chainHeight());
+		EXPECT_EQ(Height(10), storage.chainHeight());
 	}
 #endif
 
@@ -446,8 +451,9 @@ TEST(TEST_CLASS, DropBlocksAfterPreservesStatementsOfRetainedBlocksWhenNextBlock
 
 		{
 			FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+			storage.dropBlocksAfter(Height(0));
 			for (uint32_t i = 1; i <= 10; ++i) {
-				TestBlockElementContext blockCtx(Height(i));
+				TestBlockElementContext blockCtx((Height(i)));
 				storage.saveBlock(blockCtx.get());
 			}
 			EXPECT_EQ(Height(10), storage.chainHeight());
@@ -514,20 +520,29 @@ TEST(TEST_CLASS, DropBlocksAfterPreservesStatementsOfRetainedBlocksWhenNextBlock
 
 		{
 			FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+			storage.dropBlocksAfter(Height(0));
 			for (uint32_t i = 1; i <= 10; ++i) {
-				TestBlockElementContext blockCtx(Height(i));
+				TestBlockElementContext blockCtx((Height(i)));
 				storage.saveBlock(blockCtx.get());
 			}
 			EXPECT_EQ(Height(10), storage.chainHeight());
 		}
 
-		// Write mock rollback.journal targeting height 5
+		boost::filesystem::path idxPath = boost::filesystem::path(tempDir.name()) / "00000" / "blocks.idx";
+		BlockChunkIndexEntry entry5;
+		{
+			RawFile idxFile(idxPath.generic_string().c_str(), OpenMode::Read_Only, LockMode::None);
+			idxFile.seek(5 * sizeof(BlockChunkIndexEntry));
+			idxFile.read(MutableRawBuffer(reinterpret_cast<uint8_t*>(&entry5), sizeof(BlockChunkIndexEntry)));
+		}
+
+		// Write mock rollback.journal targeting height 5 with valid index-derived offsets
 		RollbackJournalHeader journalHeader;
 		journalHeader.magic = Rollback_Journal_Magic;
 		journalHeader.version = Rollback_Journal_Version;
 		journalHeader.targetHeight = 5;
 		journalHeader.previousHeight = 10;
-		journalHeader.targetBlockEnd = 100;
+		journalHeader.targetBlockEnd = static_cast<uint64_t>(entry5.blockOffset) + static_cast<uint64_t>(entry5.blockSize);
 		journalHeader.targetStmtEnd = 0;
 		journalHeader.targetIndex = 6;
 		journalHeader.padding = 0;
@@ -539,8 +554,7 @@ TEST(TEST_CLASS, DropBlocksAfterPreservesStatementsOfRetainedBlocksWhenNextBlock
 		}
 		EXPECT_TRUE(boost::filesystem::exists(journalPath));
 
-		// Make blocks.idx in chunk 00000 read-only to force ApplyRollbackOperations to fail during recovery
-		boost::filesystem::path idxPath = boost::filesystem::path(tempDir.name()) / "00000" / "blocks.idx";
+		// Make blocks.idx in chunk 00000 read-only to force ApplyRollbackOperations to fail during zeroing
 		boost::filesystem::permissions(idxPath, boost::filesystem::perms::owner_read);
 
 		// Act & Assert: Opening storage fails during recovery
@@ -561,8 +575,9 @@ TEST(TEST_CLASS, DropBlocksAfterPreservesStatementsOfRetainedBlocksWhenNextBlock
 
 		{
 			FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+			storage.dropBlocksAfter(Height(0));
 			for (uint32_t i = 1; i <= 10; ++i) {
-				TestBlockElementContext blockCtx(Height(i));
+				TestBlockElementContext blockCtx((Height(i)));
 				storage.saveBlock(blockCtx.get());
 			}
 			EXPECT_EQ(Height(10), storage.chainHeight());
@@ -593,26 +608,247 @@ TEST(TEST_CLASS, DropBlocksAfterPreservesStatementsOfRetainedBlocksWhenNextBlock
 		EXPECT_EQ(originalBlocksSize, boost::filesystem::file_size(blocksDatPath));
 	}
 
+	TEST(TEST_CLASS, RecoverUnfinishedRollbackRejectsMissingBlocksDat) {
+		// Arrange: prepare storage seeded with 10 blocks in chunk 0
+		test::TempDirectoryGuard tempDir;
+		test::PrepareStorage(tempDir.name());
+
+		{
+			FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+			storage.dropBlocksAfter(Height(0));
+			for (uint32_t i = 1; i <= 10; ++i) {
+				TestBlockElementContext blockCtx((Height(i)));
+				storage.saveBlock(blockCtx.get());
+			}
+		}
+
+		boost::filesystem::path idxPath = boost::filesystem::path(tempDir.name()) / "00000" / "blocks.idx";
+		BlockChunkIndexEntry entry5;
+		{
+			RawFile idxFile(idxPath.generic_string().c_str(), OpenMode::Read_Only, LockMode::None);
+			idxFile.seek(5 * sizeof(BlockChunkIndexEntry));
+			idxFile.read(MutableRawBuffer(reinterpret_cast<uint8_t*>(&entry5), sizeof(BlockChunkIndexEntry)));
+		}
+
+		RollbackJournalHeader journalHeader;
+		journalHeader.magic = Rollback_Journal_Magic;
+		journalHeader.version = Rollback_Journal_Version;
+		journalHeader.targetHeight = 5;
+		journalHeader.previousHeight = 10;
+		journalHeader.targetBlockEnd = static_cast<uint64_t>(entry5.blockOffset) + static_cast<uint64_t>(entry5.blockSize);
+		journalHeader.targetStmtEnd = 0;
+		journalHeader.targetIndex = 6;
+		journalHeader.padding = 0;
+
+		boost::filesystem::path journalPath = boost::filesystem::path(tempDir.name()) / "rollback.journal";
+		{
+			RawFile journalFile(journalPath.generic_string().c_str(), OpenMode::Read_Write, LockMode::None);
+			journalFile.write(RawBuffer(reinterpret_cast<const uint8_t*>(&journalHeader), sizeof(RollbackJournalHeader)));
+		}
+
+		// Delete 00000/blocks.dat to simulate missing required chunk file
+		boost::filesystem::path blocksDatPath = boost::filesystem::path(tempDir.name()) / "00000" / "blocks.dat";
+		boost::filesystem::remove(blocksDatPath);
+
+		// Act & Assert: Opening storage throws file IO error because required blocks.dat is missing
+		EXPECT_THROW(FileBlockStorage(tempDir.name(), FileBlockStorageMode::Hash_Index), catapult_file_io_error);
+	}
+
+	TEST(TEST_CLASS, RecoverUnfinishedRollbackRejectsMissingBlocksIdx) {
+		// Arrange: prepare storage seeded with 10 blocks in chunk 0
+		test::TempDirectoryGuard tempDir;
+		test::PrepareStorage(tempDir.name());
+
+		{
+			FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+			storage.dropBlocksAfter(Height(0));
+			for (uint32_t i = 1; i <= 10; ++i) {
+				TestBlockElementContext blockCtx((Height(i)));
+				storage.saveBlock(blockCtx.get());
+			}
+		}
+
+		boost::filesystem::path idxPath = boost::filesystem::path(tempDir.name()) / "00000" / "blocks.idx";
+		BlockChunkIndexEntry entry5;
+		{
+			RawFile idxFile(idxPath.generic_string().c_str(), OpenMode::Read_Only, LockMode::None);
+			idxFile.seek(5 * sizeof(BlockChunkIndexEntry));
+			idxFile.read(MutableRawBuffer(reinterpret_cast<uint8_t*>(&entry5), sizeof(BlockChunkIndexEntry)));
+		}
+
+		RollbackJournalHeader journalHeader;
+		journalHeader.magic = Rollback_Journal_Magic;
+		journalHeader.version = Rollback_Journal_Version;
+		journalHeader.targetHeight = 5;
+		journalHeader.previousHeight = 10;
+		journalHeader.targetBlockEnd = static_cast<uint64_t>(entry5.blockOffset) + static_cast<uint64_t>(entry5.blockSize);
+		journalHeader.targetStmtEnd = 0;
+		journalHeader.targetIndex = 6;
+		journalHeader.padding = 0;
+
+		boost::filesystem::path journalPath = boost::filesystem::path(tempDir.name()) / "rollback.journal";
+		{
+			RawFile journalFile(journalPath.generic_string().c_str(), OpenMode::Read_Write, LockMode::None);
+			journalFile.write(RawBuffer(reinterpret_cast<const uint8_t*>(&journalHeader), sizeof(RollbackJournalHeader)));
+		}
+
+		// Delete 00000/blocks.idx to simulate missing required chunk index file
+		boost::filesystem::remove(idxPath);
+
+		// Act & Assert: Opening storage throws file IO error because required blocks.idx is missing
+		EXPECT_THROW(FileBlockStorage(tempDir.name(), FileBlockStorageMode::Hash_Index), catapult_file_io_error);
+	}
+
+	TEST(TEST_CLASS, RecoverUnfinishedRollbackRejectsMissingStatementsDatWhenTargetStmtEndNonZero) {
+		// Arrange: prepare storage seeded with 5 blocks with statements
+		test::TempDirectoryGuard tempDir;
+		test::PrepareStorage(tempDir.name());
+
+		{
+			FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+			storage.dropBlocksAfter(Height(0));
+			for (uint32_t i = 1; i <= 5; ++i) {
+				TestBlockElementContext blockCtx((Height(i)));
+				auto pStatement = test::GenerateRandomStatements({ 1, 0, 0, 0 });
+				const_cast<model::BlockElement&>(blockCtx.get()).OptionalStatement = std::move(pStatement);
+				storage.saveBlock(blockCtx.get());
+			}
+		}
+
+		boost::filesystem::path idxPath = boost::filesystem::path(tempDir.name()) / "00000" / "blocks.idx";
+		BlockChunkIndexEntry entry3;
+		{
+			RawFile idxFile(idxPath.generic_string().c_str(), OpenMode::Read_Only, LockMode::None);
+			idxFile.seek(3 * sizeof(BlockChunkIndexEntry));
+			idxFile.read(MutableRawBuffer(reinterpret_cast<uint8_t*>(&entry3), sizeof(BlockChunkIndexEntry)));
+		}
+
+		EXPECT_GT(entry3.stmtSize, 0u);
+		auto expectedStmtEnd = static_cast<uint64_t>(entry3.stmtOffset) + static_cast<uint64_t>(entry3.stmtSize);
+
+		RollbackJournalHeader journalHeader;
+		journalHeader.magic = Rollback_Journal_Magic;
+		journalHeader.version = Rollback_Journal_Version;
+		journalHeader.targetHeight = 3;
+		journalHeader.previousHeight = 5;
+		journalHeader.targetBlockEnd = static_cast<uint64_t>(entry3.blockOffset) + static_cast<uint64_t>(entry3.blockSize);
+		journalHeader.targetStmtEnd = expectedStmtEnd;
+		journalHeader.targetIndex = 4;
+		journalHeader.padding = 0;
+
+		boost::filesystem::path journalPath = boost::filesystem::path(tempDir.name()) / "rollback.journal";
+		{
+			RawFile journalFile(journalPath.generic_string().c_str(), OpenMode::Read_Write, LockMode::None);
+			journalFile.write(RawBuffer(reinterpret_cast<const uint8_t*>(&journalHeader), sizeof(RollbackJournalHeader)));
+		}
+
+		// Delete 00000/statements.dat to simulate missing statements.dat when targetStmtEnd > 0
+		boost::filesystem::path stmtPath = boost::filesystem::path(tempDir.name()) / "00000" / "statements.dat";
+		boost::filesystem::remove(stmtPath);
+
+		// Act & Assert: Opening storage throws file IO error because required statements.dat is missing
+		EXPECT_THROW(FileBlockStorage(tempDir.name(), FileBlockStorageMode::Hash_Index), catapult_file_io_error);
+	}
+
+	TEST(TEST_CLASS, RecoverUnfinishedRollbackRejectsInconsistentTargetBlockEnd) {
+		// Arrange: prepare storage seeded with 10 blocks in chunk 0
+		test::TempDirectoryGuard tempDir;
+		test::PrepareStorage(tempDir.name());
+
+		{
+			FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+			storage.dropBlocksAfter(Height(0));
+			for (uint32_t i = 1; i <= 10; ++i) {
+				TestBlockElementContext blockCtx((Height(i)));
+				storage.saveBlock(blockCtx.get());
+			}
+		}
+
+		boost::filesystem::path idxPath = boost::filesystem::path(tempDir.name()) / "00000" / "blocks.idx";
+		BlockChunkIndexEntry entry5;
+		{
+			RawFile idxFile(idxPath.generic_string().c_str(), OpenMode::Read_Only, LockMode::None);
+			idxFile.seek(5 * sizeof(BlockChunkIndexEntry));
+			idxFile.read(MutableRawBuffer(reinterpret_cast<uint8_t*>(&entry5), sizeof(BlockChunkIndexEntry)));
+		}
+
+		RollbackJournalHeader journalHeader;
+		journalHeader.magic = Rollback_Journal_Magic;
+		journalHeader.version = Rollback_Journal_Version;
+		journalHeader.targetHeight = 5;
+		journalHeader.previousHeight = 10;
+		// Inconsistent targetBlockEnd (smaller than entry5.blockOffset + entry5.blockSize)
+		journalHeader.targetBlockEnd = static_cast<uint64_t>(entry5.blockOffset) + 1;
+		journalHeader.targetStmtEnd = 0;
+		journalHeader.targetIndex = 6;
+		journalHeader.padding = 0;
+
+		boost::filesystem::path journalPath = boost::filesystem::path(tempDir.name()) / "rollback.journal";
+		{
+			RawFile journalFile(journalPath.generic_string().c_str(), OpenMode::Read_Write, LockMode::None);
+			journalFile.write(RawBuffer(reinterpret_cast<const uint8_t*>(&journalHeader), sizeof(RollbackJournalHeader)));
+		}
+
+		// Act & Assert: Opening storage throws file IO error because targetBlockEnd does not match index entry
+		EXPECT_THROW(FileBlockStorage(tempDir.name(), FileBlockStorageMode::Hash_Index), catapult_file_io_error);
+	}
+
+	TEST(TEST_CLASS, RecoverUnfinishedRollbackCleansUpStaleJournalTmp) {
+		// Arrange: prepare storage seeded with 5 blocks
+		test::TempDirectoryGuard tempDir;
+		test::PrepareStorage(tempDir.name());
+
+		{
+			FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+			storage.dropBlocksAfter(Height(0));
+			for (uint32_t i = 1; i <= 5; ++i) {
+				TestBlockElementContext blockCtx((Height(i)));
+				storage.saveBlock(blockCtx.get());
+			}
+		}
+
+		// Create a stale rollback.journal.tmp (simulating crash before rename)
+		boost::filesystem::path tmpPath = boost::filesystem::path(tempDir.name()) / "rollback.journal.tmp";
+		{
+			RawFile tmpFile(tmpPath.generic_string().c_str(), OpenMode::Read_Write, LockMode::None);
+			std::vector<uint8_t> staleData(32, 0xFF);
+			tmpFile.write(staleData);
+		}
+		EXPECT_TRUE(boost::filesystem::exists(tmpPath));
+
+		// Act: Instantiate FileBlockStorage
+		FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+
+		// Assert: stale .tmp file was removed
+		EXPECT_FALSE(boost::filesystem::exists(tmpPath));
+		EXPECT_EQ(Height(5), storage.chainHeight());
+	}
+
 	TEST(TEST_CLASS, DropBlocksAfterThrowsIfRetainedBlockIndexEntryIsMissing) {
 		// Arrange: prepare storage seeded with 10 blocks in chunk 0
 		test::TempDirectoryGuard tempDir;
 		test::PrepareStorage(tempDir.name());
 
-		FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
-		for (uint32_t i = 1; i <= 10; ++i) {
-			TestBlockElementContext blockCtx(Height(i));
-			storage.saveBlock(blockCtx.get());
+		{
+			FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+			storage.dropBlocksAfter(Height(0));
+			for (uint32_t i = 1; i <= 10; ++i) {
+				TestBlockElementContext blockCtx((Height(i)));
+				storage.saveBlock(blockCtx.get());
+			}
+			EXPECT_EQ(Height(10), storage.chainHeight());
 		}
-		EXPECT_EQ(Height(10), storage.chainHeight());
 
 		// Manually zero out index entry for block 5 to simulate missing index entry
 		boost::filesystem::path idxPath = boost::filesystem::path(tempDir.name()) / "00000" / "blocks.idx";
 		{
-			RawFile idxFile(idxPath.generic_string().c_str(), OpenMode::Read_Write, LockMode::None);
+			RawFile idxFile(idxPath.generic_string().c_str(), OpenMode::Read_Append, LockMode::None);
 			idxFile.seek(5 * sizeof(BlockChunkIndexEntry));
 			std::vector<uint8_t> zeros(sizeof(BlockChunkIndexEntry), 0);
 			idxFile.write(zeros);
 		}
+
+		FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
 
 		// Act & Assert: dropBlocksAfter(Height(5)) must throw invalid argument and not create zero-offset journal
 		EXPECT_THROW(storage.dropBlocksAfter(Height(5)), catapult_invalid_argument);

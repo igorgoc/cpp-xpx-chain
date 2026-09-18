@@ -179,7 +179,82 @@ namespace catapult { namespace io {
 			}
 		}
 
+		void ValidateRollbackJournal(const std::string& dataDirectory, const RollbackJournalHeader& header, const IndexFile& indexFile) {
+			if (header.magic != Rollback_Journal_Magic || header.version != Rollback_Journal_Version)
+				CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: invalid magic or version");
+
+			if (header.targetHeight > header.previousHeight)
+				CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: targetHeight is greater than previousHeight");
+
+			auto expectedTargetIndex = (header.targetHeight == 0) ? 0 : static_cast<uint32_t>((header.targetHeight % Files_Per_Directory) + 1);
+			if (header.targetIndex != expectedTargetIndex)
+				CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: targetIndex does not match targetHeight");
+
+			auto currentHeight = indexFile.exists() ? indexFile.get() : 0;
+			if (currentHeight != header.previousHeight && currentHeight != header.targetHeight)
+				CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: index.dat height does not match journal state");
+
+			if (header.targetHeight == 0) {
+				if (header.targetBlockEnd != 0 || header.targetStmtEnd != 0)
+					CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: targetBlockEnd or targetStmtEnd must be 0 for targetHeight 0");
+				return;
+			}
+
+			auto height = Height(header.targetHeight);
+			auto retainedIndex = height.unwrap() % Files_Per_Directory;
+			auto retainedChunkId = height.unwrap() / Files_Per_Directory;
+
+			auto blocksDatPath = GetBlocksDatPath(dataDirectory, height);
+			if (!boost::filesystem::is_regular_file(blocksDatPath))
+				CATAPULT_THROW_FILE_IO_ERROR("missing blocks.dat during rollback");
+
+			auto idxPath = GetBlocksIdxPath(dataDirectory, height);
+			if (!boost::filesystem::is_regular_file(idxPath))
+				CATAPULT_THROW_FILE_IO_ERROR("missing blocks.idx during rollback");
+
+			BlockChunkIndexEntry retainedEntry;
+			if (!HasChunkIndexEntry(dataDirectory, height, retainedEntry))
+				CATAPULT_THROW_FILE_IO_ERROR("missing retained block index entry during rollback");
+
+			if (retainedIndex == Files_Per_Directory - 1) {
+				if (header.targetBlockEnd != 0 || header.targetStmtEnd != 0)
+					CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: boundary targetBlockEnd or targetStmtEnd must be 0");
+				return;
+			}
+
+			auto currentBlocksSize = boost::filesystem::file_size(blocksDatPath);
+			if (header.targetBlockEnd > currentBlocksSize)
+				CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: targetBlockEnd exceeds actual blocks.dat size");
+
+			auto expectedBlockEnd = static_cast<uint64_t>(retainedEntry.blockOffset) + static_cast<uint64_t>(retainedEntry.blockSize);
+			if (header.targetBlockEnd != expectedBlockEnd)
+				CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: targetBlockEnd does not match index entry");
+
+			uint64_t expectedStmtEnd = 0;
+			for (auto h = height; h > Height(0) && (h.unwrap() / Files_Per_Directory == retainedChunkId); h = h - Height(1)) {
+				BlockChunkIndexEntry stmtEntry;
+				if (HasChunkIndexEntry(dataDirectory, h, stmtEntry) && stmtEntry.stmtSize > 0) {
+					expectedStmtEnd = static_cast<uint64_t>(stmtEntry.stmtOffset) + static_cast<uint64_t>(stmtEntry.stmtSize);
+					break;
+				}
+			}
+			if (header.targetStmtEnd != expectedStmtEnd)
+				CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: targetStmtEnd does not match index entries");
+
+			auto stmtDatPath = GetStatementsDatPath(dataDirectory, height);
+			if (header.targetStmtEnd > 0) {
+				if (!boost::filesystem::is_regular_file(stmtDatPath))
+					CATAPULT_THROW_FILE_IO_ERROR("missing statements.dat during rollback when targetStmtEnd > 0");
+
+				auto currentStmtSize = boost::filesystem::file_size(stmtDatPath);
+				if (header.targetStmtEnd > currentStmtSize)
+					CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: targetStmtEnd exceeds actual statements.dat size");
+			}
+		}
+
 		void ApplyRollbackOperations(const std::string& dataDirectory, const RollbackJournalHeader& header, IndexFile& indexFile) {
+			ValidateRollbackJournal(dataDirectory, header, indexFile);
+
 			auto height = Height(header.targetHeight);
 			auto retainedChunkId = (Height(0) == height) ? 0 : (height.unwrap() / Files_Per_Directory);
 			auto retainedIndex = (Height(0) == height) ? 0 : (height.unwrap() % Files_Per_Directory);
@@ -210,40 +285,32 @@ namespace catapult { namespace io {
 				}
 			} else if (retainedIndex < Files_Per_Directory - 1) {
 				auto blocksDatPath = GetBlocksDatPath(dataDirectory, height);
-				if (boost::filesystem::is_regular_file(blocksDatPath)) {
-					auto currentBlocksSize = boost::filesystem::file_size(blocksDatPath);
-					if (header.targetBlockEnd > currentBlocksSize)
-						CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback journal: targetBlockEnd exceeds actual blocks.dat size");
-
-					boost::filesystem::resize_file(blocksDatPath, header.targetBlockEnd, ec);
-					if (ec)
-						CATAPULT_THROW_FILE_IO_ERROR(("failed to resize blocks.dat: " + ec.message()).c_str());
-				}
+				boost::filesystem::resize_file(blocksDatPath, header.targetBlockEnd, ec);
+				if (ec)
+					CATAPULT_THROW_FILE_IO_ERROR(("failed to resize blocks.dat: " + ec.message()).c_str());
 
 				auto stmtDatPath = GetStatementsDatPath(dataDirectory, height);
-				if (boost::filesystem::is_regular_file(stmtDatPath)) {
-					auto currentStmtSize = boost::filesystem::file_size(stmtDatPath);
-					if (header.targetStmtEnd > currentStmtSize)
-						CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback journal: targetStmtEnd exceeds actual statements.dat size");
-
+				if (header.targetStmtEnd > 0) {
 					boost::filesystem::resize_file(stmtDatPath, header.targetStmtEnd, ec);
+					if (ec)
+						CATAPULT_THROW_FILE_IO_ERROR(("failed to resize statements.dat: " + ec.message()).c_str());
+				} else if (boost::filesystem::is_regular_file(stmtDatPath)) {
+					boost::filesystem::resize_file(stmtDatPath, 0, ec);
 					if (ec)
 						CATAPULT_THROW_FILE_IO_ERROR(("failed to resize statements.dat: " + ec.message()).c_str());
 				}
 
 				auto idxPath = GetBlocksIdxPath(dataDirectory, height);
-				if (boost::filesystem::is_regular_file(idxPath)) {
-					auto targetOffset = header.targetIndex * sizeof(BlockChunkIndexEntry);
-					try {
-						RawFile idxFile(idxPath.generic_string().c_str(), OpenMode::Read_Append, LockMode::None);
-						if (idxFile.size() > targetOffset) {
-							std::vector<uint8_t> zeros(idxFile.size() - targetOffset, 0);
-							idxFile.seek(targetOffset);
-							idxFile.write(zeros);
-						}
-					} catch (const std::exception& e) {
-						CATAPULT_THROW_FILE_IO_ERROR(("failed to zero blocks.idx: " + std::string(e.what())).c_str());
+				auto targetOffset = header.targetIndex * sizeof(BlockChunkIndexEntry);
+				try {
+					RawFile idxFile(idxPath.generic_string().c_str(), OpenMode::Read_Append, LockMode::None);
+					if (idxFile.size() > targetOffset) {
+						std::vector<uint8_t> zeros(idxFile.size() - targetOffset, 0);
+						idxFile.seek(targetOffset);
+						idxFile.write(zeros);
 					}
+				} catch (const std::exception& e) {
+					CATAPULT_THROW_FILE_IO_ERROR(("failed to zero blocks.idx: " + std::string(e.what())).c_str());
 				}
 			}
 
@@ -276,6 +343,13 @@ namespace catapult { namespace io {
 			auto journalTmpPath = boost::filesystem::path(dataDirectory) / "rollback.journal.tmp";
 			auto journalPath = boost::filesystem::path(dataDirectory) / "rollback.journal";
 
+			if (boost::filesystem::exists(journalTmpPath)) {
+				boost::system::error_code ec;
+				boost::filesystem::remove(journalTmpPath, ec);
+				if (ec)
+					CATAPULT_THROW_FILE_IO_ERROR(("failed to remove existing rollback.journal.tmp before write: " + ec.message()).c_str());
+			}
+
 #ifdef _WIN32
 			int fd = _open(journalTmpPath.generic_string().c_str(), _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY, _S_IREAD | _S_IWRITE);
 			if (fd == -1)
@@ -290,7 +364,8 @@ namespace catapult { namespace io {
 				_close(fd);
 				CATAPULT_THROW_FILE_IO_ERROR("failed to flush rollback.journal.tmp to disk");
 			}
-			_close(fd);
+			if (_close(fd) != 0)
+				CATAPULT_THROW_FILE_IO_ERROR("failed to close rollback.journal.tmp");
 #else
 			int fd = ::open(journalTmpPath.generic_string().c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
 			if (fd == -1)
@@ -304,7 +379,8 @@ namespace catapult { namespace io {
 				::close(fd);
 				CATAPULT_THROW_FILE_IO_ERROR("failed to fsync rollback.journal.tmp to disk");
 			}
-			::close(fd);
+			if (::close(fd) != 0)
+				CATAPULT_THROW_FILE_IO_ERROR("failed to close rollback.journal.tmp");
 #endif
 
 			boost::system::error_code ec;
@@ -314,13 +390,14 @@ namespace catapult { namespace io {
 
 #ifndef _WIN32
 			int dirFd = ::open(dataDirectory.c_str(), O_RDONLY | O_DIRECTORY);
-			if (dirFd != -1) {
-				if (::fsync(dirFd) != 0) {
-					::close(dirFd);
-					CATAPULT_THROW_FILE_IO_ERROR("failed to fsync data directory for rollback.journal");
-				}
+			if (dirFd == -1)
+				CATAPULT_THROW_FILE_IO_ERROR("failed to open data directory for fsync");
+			if (::fsync(dirFd) != 0) {
 				::close(dirFd);
+				CATAPULT_THROW_FILE_IO_ERROR("failed to fsync data directory for rollback.journal");
 			}
+			if (::close(dirFd) != 0)
+				CATAPULT_THROW_FILE_IO_ERROR("failed to close data directory after fsync");
 #endif
 		}
 
@@ -520,6 +597,14 @@ namespace catapult { namespace io {
 	}
 
 	void FileBlockStorage::recoverUnfinishedRollback() {
+		auto journalTmpPath = boost::filesystem::path(m_dataDirectory) / "rollback.journal.tmp";
+		if (boost::filesystem::exists(journalTmpPath)) {
+			boost::system::error_code ec;
+			boost::filesystem::remove(journalTmpPath, ec);
+			if (ec)
+				CATAPULT_THROW_FILE_IO_ERROR(("failed to remove stale rollback.journal.tmp on startup: " + ec.message()).c_str());
+		}
+
 		auto journalPath = boost::filesystem::path(m_dataDirectory) / "rollback.journal";
 		if (!boost::filesystem::is_regular_file(journalPath))
 			return;
@@ -533,44 +618,22 @@ namespace catapult { namespace io {
 			journalFile.read(MutableRawBuffer(reinterpret_cast<uint8_t*>(&header), sizeof(RollbackJournalHeader)));
 		}
 
-		if (header.magic != Rollback_Journal_Magic || header.version != Rollback_Journal_Version)
-			CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: invalid magic or version");
-
-		if (header.targetHeight > header.previousHeight)
-			CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: targetHeight is greater than previousHeight");
-
-		auto expectedTargetIndex = (header.targetHeight == 0) ? 0 : static_cast<uint32_t>((header.targetHeight % Files_Per_Directory) + 1);
-		if (header.targetIndex != expectedTargetIndex)
-			CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: targetIndex does not match targetHeight");
-
-		auto currentHeight = m_indexFile.exists() ? m_indexFile.get() : 0;
-		if (currentHeight != header.previousHeight && currentHeight != header.targetHeight)
-			CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: index.dat height does not match journal state");
-
-		// If targetHeight > 0, validate target offsets against physical files before executing
-		if (header.targetHeight > 0) {
-			auto blocksDatPath = GetBlocksDatPath(m_dataDirectory, Height(header.targetHeight));
-			if (boost::filesystem::is_regular_file(blocksDatPath)) {
-				auto currentBlocksSize = boost::filesystem::file_size(blocksDatPath);
-				if (header.targetBlockEnd > currentBlocksSize)
-					CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: targetBlockEnd exceeds actual blocks.dat size");
-			}
-
-			auto stmtDatPath = GetStatementsDatPath(m_dataDirectory, Height(header.targetHeight));
-			if (boost::filesystem::is_regular_file(stmtDatPath)) {
-				auto currentStmtSize = boost::filesystem::file_size(stmtDatPath);
-				if (header.targetStmtEnd > currentStmtSize)
-					CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: targetStmtEnd exceeds actual statements.dat size");
-			}
-		}
-
-		// Apply rollback operations. If an error occurs, it throws and preserves rollback.journal.
+		// Apply rollback operations (which validates the journal against physical files and index entries).
+		// If an error occurs, it throws and preserves rollback.journal.
 		ApplyRollbackOperations(m_dataDirectory, header, m_indexFile);
 
 		boost::system::error_code ec;
 		boost::filesystem::remove(journalPath, ec);
 		if (ec)
 			CATAPULT_THROW_FILE_IO_ERROR(("failed to remove rollback.journal after recovery: " + ec.message()).c_str());
+
+#ifndef _WIN32
+		int dirFd = ::open(m_dataDirectory.c_str(), O_RDONLY | O_DIRECTORY);
+		if (dirFd != -1) {
+			::fsync(dirFd);
+			::close(dirFd);
+		}
+#endif
 	}
 
 	// endregion
@@ -667,6 +730,14 @@ namespace catapult { namespace io {
 		boost::filesystem::remove(journalPath, ec);
 		if (ec)
 			CATAPULT_THROW_FILE_IO_ERROR(("failed to remove rollback.journal: " + ec.message()).c_str());
+
+#ifndef _WIN32
+		int dirFd = ::open(m_dataDirectory.c_str(), O_RDONLY | O_DIRECTORY);
+		if (dirFd != -1) {
+			::fsync(dirFd);
+			::close(dirFd);
+		}
+#endif
 	}
 
 	// endregion
