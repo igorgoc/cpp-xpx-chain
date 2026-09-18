@@ -43,8 +43,22 @@ namespace catapult { namespace io {
 			uint32_t stmtOffset;   // byte offset inside statements.dat
 			uint32_t stmtSize;     // byte length of statement (0 if none)
 		};
+
+		struct RollbackJournalHeader {
+			uint32_t magic;           // 0x5349524A ('SIRJ')
+			uint32_t version;         // 1
+			uint64_t targetHeight;    // Target height
+			uint64_t previousHeight;  // Height before rollback
+			uint64_t targetBlockEnd;  // Target file size for blocks.dat
+			uint64_t targetStmtEnd;   // Target file size for statements.dat
+			uint32_t targetIndex;     // Index from which blocks.idx should be zeroed
+			uint32_t padding;
+		};
 #pragma pack(pop)
 		static_assert(sizeof(BlockChunkIndexEntry) == 16, "BlockChunkIndexEntry must be exactly 16 bytes");
+		static_assert(sizeof(RollbackJournalHeader) == 48, "RollbackJournalHeader must be exactly 48 bytes");
+		static constexpr uint32_t Rollback_Journal_Magic = 0x5349524Au;
+		static constexpr uint32_t Rollback_Journal_Version = 1u;
 
 		// region path utils
 
@@ -156,6 +170,91 @@ namespace catapult { namespace io {
 				return true;
 			} catch (...) {
 				return false;
+			}
+		}
+
+		void ApplyRollbackOperations(const std::string& dataDirectory, const RollbackJournalHeader& header, IndexFile& indexFile) {
+			auto height = Height(header.targetHeight);
+			auto retainedChunkId = (Height(0) == height) ? 0 : (height.unwrap() / Files_Per_Directory);
+			auto retainedIndex = (Height(0) == height) ? 0 : (height.unwrap() % Files_Per_Directory);
+
+			boost::system::error_code ec;
+
+			// 1. Truncate files inside retained chunk
+			if (Height(0) == height) {
+				auto blocksDatPath = GetBlocksDatPath(dataDirectory, Height(0));
+				if (boost::filesystem::is_regular_file(blocksDatPath)) {
+					boost::filesystem::resize_file(blocksDatPath, 0, ec);
+					if (ec)
+						CATAPULT_THROW_FILE_IO_ERROR(("failed to resize blocks.dat at height 0: " + ec.message()).c_str());
+				}
+
+				auto stmtDatPath = GetStatementsDatPath(dataDirectory, Height(0));
+				if (boost::filesystem::is_regular_file(stmtDatPath)) {
+					boost::filesystem::resize_file(stmtDatPath, 0, ec);
+					if (ec)
+						CATAPULT_THROW_FILE_IO_ERROR(("failed to resize statements.dat at height 0: " + ec.message()).c_str());
+				}
+
+				auto idxPath = GetBlocksIdxPath(dataDirectory, Height(0));
+				if (boost::filesystem::is_regular_file(idxPath)) {
+					boost::filesystem::resize_file(idxPath, 0, ec);
+					if (ec)
+						CATAPULT_THROW_FILE_IO_ERROR(("failed to resize blocks.idx at height 0: " + ec.message()).c_str());
+				}
+			} else if (retainedIndex < Files_Per_Directory - 1) {
+				auto blocksDatPath = GetBlocksDatPath(dataDirectory, height);
+				if (boost::filesystem::is_regular_file(blocksDatPath)) {
+					boost::filesystem::resize_file(blocksDatPath, header.targetBlockEnd, ec);
+					if (ec)
+						CATAPULT_THROW_FILE_IO_ERROR(("failed to resize blocks.dat: " + ec.message()).c_str());
+				}
+
+				auto stmtDatPath = GetStatementsDatPath(dataDirectory, height);
+				if (boost::filesystem::is_regular_file(stmtDatPath)) {
+					boost::filesystem::resize_file(stmtDatPath, header.targetStmtEnd, ec);
+					if (ec)
+						CATAPULT_THROW_FILE_IO_ERROR(("failed to resize statements.dat: " + ec.message()).c_str());
+				}
+
+				auto idxPath = GetBlocksIdxPath(dataDirectory, height);
+				if (boost::filesystem::is_regular_file(idxPath)) {
+					auto targetOffset = header.targetIndex * sizeof(BlockChunkIndexEntry);
+					try {
+						RawFile idxFile(idxPath.generic_string().c_str(), OpenMode::Read_Append, LockMode::None);
+						if (idxFile.size() > targetOffset) {
+							std::vector<uint8_t> zeros(idxFile.size() - targetOffset, 0);
+							idxFile.seek(targetOffset);
+							idxFile.write(zeros);
+						}
+					} catch (const std::exception& e) {
+						CATAPULT_THROW_FILE_IO_ERROR(("failed to zero blocks.idx: " + std::string(e.what())).c_str());
+					}
+				}
+			}
+
+			// 2. Commit logical chain height
+			indexFile.set(height.unwrap());
+
+			// 3. Purge future chunk directories beyond the retained chunk
+			if (boost::filesystem::exists(dataDirectory) && boost::filesystem::is_directory(dataDirectory)) {
+				std::vector<boost::filesystem::path> futureChunkPaths;
+				boost::filesystem::directory_iterator endIt;
+				for (boost::filesystem::directory_iterator it(dataDirectory); it != endIt; ++it) {
+					if (boost::filesystem::is_directory(it->path())) {
+						uint64_t chunkId = 0;
+						if (TryGetChunkId(it->path(), chunkId)) {
+							if (chunkId > retainedChunkId)
+								futureChunkPaths.push_back(it->path());
+						}
+					}
+				}
+
+				for (const auto& path : futureChunkPaths) {
+					boost::filesystem::remove_all(path, ec);
+					if (ec)
+						CATAPULT_THROW_FILE_IO_ERROR(("failed to remove future chunk directory: " + path.string() + ": " + ec.message()).c_str());
+				}
 			}
 		}
 
@@ -340,8 +439,29 @@ namespace catapult { namespace io {
 			, m_mode(mode)
 			, m_hashFile(m_dataDirectory)
 			, m_chunkWriter(m_dataDirectory)
-			, m_indexFile((boost::filesystem::path(m_dataDirectory) / "index.dat").generic_string())
-	{}
+			, m_indexFile((boost::filesystem::path(m_dataDirectory) / "index.dat").generic_string()) {
+		recoverUnfinishedRollback();
+	}
+
+	void FileBlockStorage::recoverUnfinishedRollback() {
+		auto journalPath = boost::filesystem::path(m_dataDirectory) / "rollback.journal";
+		if (!boost::filesystem::is_regular_file(journalPath))
+			return;
+
+		try {
+			RawFile journalFile(journalPath.generic_string().c_str(), OpenMode::Read_Only, LockMode::None);
+			if (journalFile.size() >= sizeof(RollbackJournalHeader)) {
+				RollbackJournalHeader header;
+				journalFile.read(MutableRawBuffer(reinterpret_cast<uint8_t*>(&header), sizeof(RollbackJournalHeader)));
+				if (header.magic == Rollback_Journal_Magic && header.version == Rollback_Journal_Version) {
+					ApplyRollbackOperations(m_dataDirectory, header, m_indexFile);
+				}
+			}
+		} catch (...) {}
+
+		boost::system::error_code ec;
+		boost::filesystem::remove(journalPath, ec);
+	}
 
 	// endregion
 
@@ -387,64 +507,29 @@ namespace catapult { namespace io {
 		m_hashFile.reset();
 		m_chunkWriter.reset();
 
+		auto currentHeight = chainHeight();
+		if (height >= currentHeight && Height(0) != height)
+			return;
+
 		auto retainedChunkId = (Height(0) == height) ? 0 : (height.unwrap() / Files_Per_Directory);
 		auto retainedIndex = (Height(0) == height) ? 0 : (height.unwrap() % Files_Per_Directory);
 
-		// 1. Collect all future chunk directories beyond the retained chunk without mutating during iteration
-		std::vector<boost::filesystem::path> futureChunkPaths;
-		if (boost::filesystem::exists(m_dataDirectory) && boost::filesystem::is_directory(m_dataDirectory)) {
-			boost::filesystem::directory_iterator endIt;
-			for (boost::filesystem::directory_iterator it(m_dataDirectory); it != endIt; ++it) {
-				if (boost::filesystem::is_directory(it->path())) {
-					uint64_t chunkId = 0;
-					if (TryGetChunkId(it->path(), chunkId)) {
-						if (chunkId > retainedChunkId)
-							futureChunkPaths.push_back(it->path());
-					}
-				}
-			}
-		}
+		RollbackJournalHeader header;
+		header.magic = Rollback_Journal_Magic;
+		header.version = Rollback_Journal_Version;
+		header.targetHeight = height.unwrap();
+		header.previousHeight = currentHeight.unwrap();
+		header.targetBlockEnd = 0;
+		header.targetStmtEnd = 0;
+		header.targetIndex = static_cast<uint32_t>(retainedIndex + 1);
+		header.padding = 0;
 
-		// 2. Clean / truncate within the active retained chunk
-		if (Height(0) == height) {
-			// Height 0 reset: truncate blocks/statements/index in chunk 00000 to 0 bytes.
-			// Note: 00000/hashes.dat is preserved (minimum 64 bytes for genesis) as hash loading is bounded by index.dat.
-			boost::system::error_code ec;
-			auto blocksDatPath = GetBlocksDatPath(m_dataDirectory, Height(0));
-			if (boost::filesystem::is_regular_file(blocksDatPath)) {
-				boost::filesystem::resize_file(blocksDatPath, 0, ec);
-				if (ec)
-					CATAPULT_THROW_FILE_IO_ERROR(("failed to resize blocks.dat at height 0: " + ec.message()).c_str());
-			}
-
-			auto stmtDatPath = GetStatementsDatPath(m_dataDirectory, Height(0));
-			if (boost::filesystem::is_regular_file(stmtDatPath)) {
-				boost::filesystem::resize_file(stmtDatPath, 0, ec);
-				if (ec)
-					CATAPULT_THROW_FILE_IO_ERROR(("failed to resize statements.dat at height 0: " + ec.message()).c_str());
-			}
-
-			auto idxPath = GetBlocksIdxPath(m_dataDirectory, Height(0));
-			if (boost::filesystem::is_regular_file(idxPath)) {
-				boost::filesystem::resize_file(idxPath, 0, ec);
-				if (ec)
-					CATAPULT_THROW_FILE_IO_ERROR(("failed to resize blocks.idx at height 0: " + ec.message()).c_str());
-			}
-		} else if (retainedIndex < Files_Per_Directory - 1) {
+		if (Height(0) != height && retainedIndex < Files_Per_Directory - 1) {
 			auto nextHeight = height + Height(1);
 			BlockChunkIndexEntry nextEntry;
 			if (HasChunkIndexEntry(m_dataDirectory, nextHeight, nextEntry)) {
-				boost::system::error_code ec;
+				header.targetBlockEnd = nextEntry.blockOffset;
 
-				// Truncate blocks.dat in the retained chunk
-				auto blocksDatPath = GetBlocksDatPath(m_dataDirectory, height);
-				if (boost::filesystem::is_regular_file(blocksDatPath)) {
-					boost::filesystem::resize_file(blocksDatPath, nextEntry.blockOffset, ec);
-					if (ec)
-						CATAPULT_THROW_FILE_IO_ERROR(("failed to resize blocks.dat: " + ec.message()).c_str());
-				}
-
-				// Truncate statements.dat to the end of the last retained statement in the retained chunk
 				uint64_t lastRetainedStmtEnd = 0;
 				for (auto h = height; h > Height(0) && (h.unwrap() / Files_Per_Directory == retainedChunkId); h = h - Height(1)) {
 					BlockChunkIndexEntry retainedEntry;
@@ -453,42 +538,23 @@ namespace catapult { namespace io {
 						break;
 					}
 				}
-
-				auto stmtDatPath = GetStatementsDatPath(m_dataDirectory, height);
-				if (boost::filesystem::is_regular_file(stmtDatPath)) {
-					boost::filesystem::resize_file(stmtDatPath, lastRetainedStmtEnd, ec);
-					if (ec)
-						CATAPULT_THROW_FILE_IO_ERROR(("failed to resize statements.dat: " + ec.message()).c_str());
-				}
-
-				// Zero index entries from (retainedIndex + 1) to EOF
-				auto idxPath = GetBlocksIdxPath(m_dataDirectory, height);
-				if (boost::filesystem::is_regular_file(idxPath)) {
-					auto targetOffset = (retainedIndex + 1) * sizeof(BlockChunkIndexEntry);
-					try {
-						RawFile idxFile(idxPath.generic_string().c_str(), OpenMode::Read_Append, LockMode::None);
-						if (idxFile.size() > targetOffset) {
-							std::vector<uint8_t> zeros(idxFile.size() - targetOffset, 0);
-							idxFile.seek(targetOffset);
-							idxFile.write(zeros);
-						}
-					} catch (const std::exception& e) {
-						CATAPULT_THROW_FILE_IO_ERROR(("failed to zero blocks.idx: " + std::string(e.what())).c_str());
-					}
-				}
+				header.targetStmtEnd = lastRetainedStmtEnd;
 			}
 		}
 
-		// 3. Commit updated height to index.dat
-		m_indexFile.set(height.unwrap());
-
-		// 4. Purge future chunk directories only after height has been safely committed
-		for (const auto& path : futureChunkPaths) {
-			boost::system::error_code ec;
-			boost::filesystem::remove_all(path, ec);
-			if (ec)
-				CATAPULT_THROW_FILE_IO_ERROR(("failed to remove future chunk directory: " + path.string() + ": " + ec.message()).c_str());
+		// 1. Durably write rollback journal header before modifying any files
+		auto journalPath = boost::filesystem::path(m_dataDirectory) / "rollback.journal";
+		{
+			RawFile journalFile(journalPath.generic_string().c_str(), OpenMode::Read_Write, LockMode::None);
+			journalFile.write(RawBuffer(reinterpret_cast<const uint8_t*>(&header), sizeof(RollbackJournalHeader)));
 		}
+
+		// 2. Apply all file truncations, height commit, and directory purges
+		ApplyRollbackOperations(m_dataDirectory, header, m_indexFile);
+
+		// 3. Remove rollback journal after successful completion
+		boost::system::error_code ec;
+		boost::filesystem::remove(journalPath, ec);
 	}
 
 	// endregion

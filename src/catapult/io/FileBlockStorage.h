@@ -59,6 +59,7 @@ namespace catapult { namespace io {
 
 	private:
 		void requireHeight(Height height, const char* description) const;
+		void recoverUnfinishedRollback();
 
 	private:
 		class HashFile final {

@@ -43,8 +43,22 @@ namespace {
 		uint32_t stmtOffset;
 		uint32_t stmtSize;
 	};
+
+	struct RollbackJournalHeader {
+		uint32_t magic;
+		uint32_t version;
+		uint64_t targetHeight;
+		uint64_t previousHeight;
+		uint64_t targetBlockEnd;
+		uint64_t targetStmtEnd;
+		uint32_t targetIndex;
+		uint32_t padding;
+	};
 #pragma pack(pop)
 	static_assert(sizeof(BlockChunkIndexEntry) == 16, "BlockChunkIndexEntry must be exactly 16 bytes");
+	static_assert(sizeof(RollbackJournalHeader) == 48, "RollbackJournalHeader must be exactly 48 bytes");
+	static constexpr uint32_t Rollback_Journal_Magic = 0x5349524Au;
+	static constexpr uint32_t Rollback_Journal_Version = 1u;
 
 	struct TestBlockElementContext {
 		model::UniqueEntityPtr<model::Block> pBlock;
@@ -424,5 +438,69 @@ TEST(TEST_CLASS, DropBlocksAfterPreservesStatementsOfRetainedBlocksWhenNextBlock
 		EXPECT_EQ(Height(65536), storage.chainHeight());
 	}
 #endif
+
+	TEST(TEST_CLASS, RecoverUnfinishedRollbackReconcilesInterruptedRollback) {
+		// Arrange: prepare storage seeded with 10 blocks in chunk 0
+		test::TempDirectoryGuard tempDir;
+		test::PrepareStorage(tempDir.name());
+
+		{
+			FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+			for (uint32_t i = 1; i <= 10; ++i) {
+				TestBlockElementContext blockCtx(Height(i));
+				storage.saveBlock(blockCtx.get());
+			}
+			EXPECT_EQ(Height(10), storage.chainHeight());
+		}
+
+		// Read index entry for block 6 to get expected blockOffset at height 5 rollback
+		boost::filesystem::path idxPath = boost::filesystem::path(tempDir.name()) / "00000" / "blocks.idx";
+		BlockChunkIndexEntry entry6;
+		{
+			RawFile idxFile(idxPath.generic_string().c_str(), OpenMode::Read_Only, LockMode::None);
+			idxFile.seek(6 * sizeof(BlockChunkIndexEntry));
+			idxFile.read(MutableRawBuffer(reinterpret_cast<uint8_t*>(&entry6), sizeof(BlockChunkIndexEntry)));
+		}
+
+		// Create dummy future chunk 00001 (simulating crash before future chunk purge)
+		boost::filesystem::path chunk1Path = boost::filesystem::path(tempDir.name()) / "00001";
+		boost::filesystem::create_directories(chunk1Path);
+		EXPECT_TRUE(boost::filesystem::exists(chunk1Path));
+
+		// Write mock rollback.journal simulating a crash mid-rollback to height 5
+		RollbackJournalHeader journalHeader;
+		journalHeader.magic = Rollback_Journal_Magic;
+		journalHeader.version = Rollback_Journal_Version;
+		journalHeader.targetHeight = 5;
+		journalHeader.previousHeight = 10;
+		journalHeader.targetBlockEnd = entry6.blockOffset;
+		journalHeader.targetStmtEnd = 0;
+		journalHeader.targetIndex = 6;
+		journalHeader.padding = 0;
+
+		boost::filesystem::path journalPath = boost::filesystem::path(tempDir.name()) / "rollback.journal";
+		{
+			RawFile journalFile(journalPath.generic_string().c_str(), OpenMode::Read_Write, LockMode::None);
+			journalFile.write(RawBuffer(reinterpret_cast<const uint8_t*>(&journalHeader), sizeof(RollbackJournalHeader)));
+		}
+		EXPECT_TRUE(boost::filesystem::exists(journalPath));
+
+		// Act: Instantiate FileBlockStorage (triggers recoverUnfinishedRollback on startup)
+		FileBlockStorage recoveredStorage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+
+		// Assert:
+		// 1. Chain height is recovered to 5
+		EXPECT_EQ(Height(5), recoveredStorage.chainHeight());
+
+		// 2. Future chunk 00001 was purged during startup recovery
+		EXPECT_FALSE(boost::filesystem::exists(chunk1Path));
+
+		// 3. Rollback journal was removed
+		EXPECT_FALSE(boost::filesystem::exists(journalPath));
+
+		// 4. Retained block 5 is loadable and valid
+		auto pBlock5 = recoveredStorage.loadBlockElement(Height(5));
+		EXPECT_EQ(Height(5), pBlock5->Block.Height);
+	}
 
 }}
