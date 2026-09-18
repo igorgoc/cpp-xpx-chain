@@ -28,6 +28,15 @@
 #include <cctype>
 #include <inttypes.h>
 
+#ifdef _WIN32
+#include <io.h>
+#include <fcntl.h>
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 namespace catapult { namespace io {
 
 	namespace {
@@ -205,6 +214,10 @@ namespace catapult { namespace io {
 			} else if (retainedIndex < Files_Per_Directory - 1) {
 				auto blocksDatPath = GetBlocksDatPath(dataDirectory, height);
 				if (boost::filesystem::is_regular_file(blocksDatPath)) {
+					auto currentBlocksSize = boost::filesystem::file_size(blocksDatPath);
+					if (header.targetBlockEnd > currentBlocksSize)
+						CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback journal: targetBlockEnd exceeds actual blocks.dat size");
+
 					boost::filesystem::resize_file(blocksDatPath, header.targetBlockEnd, ec);
 					if (ec)
 						CATAPULT_THROW_FILE_IO_ERROR(("failed to resize blocks.dat: " + ec.message()).c_str());
@@ -212,6 +225,10 @@ namespace catapult { namespace io {
 
 				auto stmtDatPath = GetStatementsDatPath(dataDirectory, height);
 				if (boost::filesystem::is_regular_file(stmtDatPath)) {
+					auto currentStmtSize = boost::filesystem::file_size(stmtDatPath);
+					if (header.targetStmtEnd > currentStmtSize)
+						CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback journal: targetStmtEnd exceeds actual statements.dat size");
+
 					boost::filesystem::resize_file(stmtDatPath, header.targetStmtEnd, ec);
 					if (ec)
 						CATAPULT_THROW_FILE_IO_ERROR(("failed to resize statements.dat: " + ec.message()).c_str());
@@ -262,15 +279,44 @@ namespace catapult { namespace io {
 			auto journalTmpPath = boost::filesystem::path(dataDirectory) / "rollback.journal.tmp";
 			auto journalPath = boost::filesystem::path(dataDirectory) / "rollback.journal";
 
-			{
-				RawFile journalFile(journalTmpPath.generic_string().c_str(), OpenMode::Read_Write, LockMode::None);
-				journalFile.write(RawBuffer(reinterpret_cast<const uint8_t*>(&header), sizeof(RollbackJournalHeader)));
+#ifdef _WIN32
+			int fd = _open(journalTmpPath.generic_string().c_str(), _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY, _S_IREAD | _S_IWRITE);
+			if (fd == -1)
+				CATAPULT_THROW_FILE_IO_ERROR("failed to open rollback.journal.tmp for writing");
+			auto written = _write(fd, &header, sizeof(RollbackJournalHeader));
+			if (written != sizeof(RollbackJournalHeader)) {
+				_close(fd);
+				CATAPULT_THROW_FILE_IO_ERROR("failed to write complete rollback.journal.tmp");
 			}
+			HANDLE h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
+			if (h != INVALID_HANDLE_VALUE)
+				FlushFileBuffers(h);
+			_close(fd);
+#else
+			int fd = ::open(journalTmpPath.generic_string().c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+			if (fd == -1)
+				CATAPULT_THROW_FILE_IO_ERROR("failed to open rollback.journal.tmp for writing");
+			auto written = ::write(fd, &header, sizeof(RollbackJournalHeader));
+			if (written != sizeof(RollbackJournalHeader)) {
+				::close(fd);
+				CATAPULT_THROW_FILE_IO_ERROR("failed to write complete rollback.journal.tmp");
+			}
+			::fsync(fd);
+			::close(fd);
+#endif
 
 			boost::system::error_code ec;
 			boost::filesystem::rename(journalTmpPath, journalPath, ec);
 			if (ec)
-				CATAPULT_THROW_FILE_IO_ERROR(("failed to atomically create rollback.journal: " + ec.message()).c_str());
+				CATAPULT_THROW_FILE_IO_ERROR(("failed to atomically rename rollback.journal: " + ec.message()).c_str());
+
+#ifndef _WIN32
+			int dirFd = ::open(dataDirectory.c_str(), O_RDONLY | O_DIRECTORY);
+			if (dirFd != -1) {
+				::fsync(dirFd);
+				::close(dirFd);
+			}
+#endif
 		}
 
 		// endregion
@@ -478,8 +524,9 @@ namespace catapult { namespace io {
 		if (header.targetHeight > header.previousHeight)
 			CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: targetHeight is greater than previousHeight");
 
-		if (header.targetIndex > Files_Per_Directory)
-			CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: targetIndex exceeds directory capacity");
+		auto expectedTargetIndex = (header.targetHeight == 0) ? 0 : static_cast<uint32_t>((header.targetHeight % Files_Per_Directory) + 1);
+		if (header.targetIndex != expectedTargetIndex)
+			CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: targetIndex does not match targetHeight");
 
 		auto currentHeight = m_indexFile.exists() ? m_indexFile.get() : 0;
 		if (currentHeight != header.previousHeight && currentHeight != header.targetHeight)
@@ -552,25 +599,28 @@ namespace catapult { namespace io {
 		header.previousHeight = currentHeight.unwrap();
 		header.targetBlockEnd = 0;
 		header.targetStmtEnd = 0;
-		header.targetIndex = static_cast<uint32_t>(retainedIndex + 1);
+		header.targetIndex = static_cast<uint32_t>((Height(0) == height) ? 0 : (retainedIndex + 1));
 		header.padding = 0;
 
 		if (Height(0) != height && retainedIndex < Files_Per_Directory - 1) {
-			auto nextHeight = height + Height(1);
-			BlockChunkIndexEntry nextEntry;
-			if (HasChunkIndexEntry(m_dataDirectory, nextHeight, nextEntry)) {
-				header.targetBlockEnd = nextEntry.blockOffset;
-
-				uint64_t lastRetainedStmtEnd = 0;
-				for (auto h = height; h > Height(0) && (h.unwrap() / Files_Per_Directory == retainedChunkId); h = h - Height(1)) {
-					BlockChunkIndexEntry retainedEntry;
-					if (HasChunkIndexEntry(m_dataDirectory, h, retainedEntry) && retainedEntry.stmtSize > 0) {
-						lastRetainedStmtEnd = static_cast<uint64_t>(retainedEntry.stmtOffset) + static_cast<uint64_t>(retainedEntry.stmtSize);
-						break;
-					}
-				}
-				header.targetStmtEnd = lastRetainedStmtEnd;
+			BlockChunkIndexEntry retainedEntry;
+			if (!HasChunkIndexEntry(m_dataDirectory, height, retainedEntry)) {
+				std::ostringstream out;
+				out << "cannot rollback: retained block index entry missing at height " << height;
+				CATAPULT_THROW_INVALID_ARGUMENT(out.str().c_str());
 			}
+
+			header.targetBlockEnd = static_cast<uint64_t>(retainedEntry.blockOffset) + static_cast<uint64_t>(retainedEntry.blockSize);
+
+			uint64_t lastRetainedStmtEnd = 0;
+			for (auto h = height; h > Height(0) && (h.unwrap() / Files_Per_Directory == retainedChunkId); h = h - Height(1)) {
+				BlockChunkIndexEntry stmtEntry;
+				if (HasChunkIndexEntry(m_dataDirectory, h, stmtEntry) && stmtEntry.stmtSize > 0) {
+					lastRetainedStmtEnd = static_cast<uint64_t>(stmtEntry.stmtOffset) + static_cast<uint64_t>(stmtEntry.stmtSize);
+					break;
+				}
+			}
+			header.targetStmtEnd = lastRetainedStmtEnd;
 		}
 
 		// 1. Durably write rollback journal header before modifying any files

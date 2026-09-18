@@ -554,4 +554,75 @@ TEST(TEST_CLASS, DropBlocksAfterPreservesStatementsOfRetainedBlocksWhenNextBlock
 	}
 #endif
 
+	TEST(TEST_CLASS, RecoverUnfinishedRollbackRejectsOversizedJournalOffsets) {
+		// Arrange: prepare storage seeded with 10 blocks in chunk 0
+		test::TempDirectoryGuard tempDir;
+		test::PrepareStorage(tempDir.name());
+
+		{
+			FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+			for (uint32_t i = 1; i <= 10; ++i) {
+				TestBlockElementContext blockCtx(Height(i));
+				storage.saveBlock(blockCtx.get());
+			}
+			EXPECT_EQ(Height(10), storage.chainHeight());
+		}
+
+		boost::filesystem::path blocksDatPath = boost::filesystem::path(tempDir.name()) / "00000" / "blocks.dat";
+		auto originalBlocksSize = boost::filesystem::file_size(blocksDatPath);
+
+		// Write mock rollback.journal targeting height 5 with oversized targetBlockEnd
+		RollbackJournalHeader journalHeader;
+		journalHeader.magic = Rollback_Journal_Magic;
+		journalHeader.version = Rollback_Journal_Version;
+		journalHeader.targetHeight = 5;
+		journalHeader.previousHeight = 10;
+		journalHeader.targetBlockEnd = originalBlocksSize + 100000; // Oversized offset!
+		journalHeader.targetStmtEnd = 0;
+		journalHeader.targetIndex = 6;
+		journalHeader.padding = 0;
+
+		boost::filesystem::path journalPath = boost::filesystem::path(tempDir.name()) / "rollback.journal";
+		{
+			RawFile journalFile(journalPath.generic_string().c_str(), OpenMode::Read_Write, LockMode::None);
+			journalFile.write(RawBuffer(reinterpret_cast<const uint8_t*>(&journalHeader), sizeof(RollbackJournalHeader)));
+		}
+
+		// Act & Assert: Opening storage throws catapult_file_io_error without extending blocks.dat with zeros
+		EXPECT_THROW(FileBlockStorage(tempDir.name(), FileBlockStorageMode::Hash_Index), catapult_file_io_error);
+		EXPECT_EQ(originalBlocksSize, boost::filesystem::file_size(blocksDatPath));
+	}
+
+	TEST(TEST_CLASS, DropBlocksAfterThrowsIfRetainedBlockIndexEntryIsMissing) {
+		// Arrange: prepare storage seeded with 10 blocks in chunk 0
+		test::TempDirectoryGuard tempDir;
+		test::PrepareStorage(tempDir.name());
+
+		FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+		for (uint32_t i = 1; i <= 10; ++i) {
+			TestBlockElementContext blockCtx(Height(i));
+			storage.saveBlock(blockCtx.get());
+		}
+		EXPECT_EQ(Height(10), storage.chainHeight());
+
+		// Manually zero out index entry for block 5 to simulate missing index entry
+		boost::filesystem::path idxPath = boost::filesystem::path(tempDir.name()) / "00000" / "blocks.idx";
+		{
+			RawFile idxFile(idxPath.generic_string().c_str(), OpenMode::Read_Write, LockMode::None);
+			idxFile.seek(5 * sizeof(BlockChunkIndexEntry));
+			std::vector<uint8_t> zeros(sizeof(BlockChunkIndexEntry), 0);
+			idxFile.write(zeros);
+		}
+
+		// Act & Assert: dropBlocksAfter(Height(5)) must throw invalid argument and not create zero-offset journal
+		EXPECT_THROW(storage.dropBlocksAfter(Height(5)), catapult_invalid_argument);
+
+		// Assert: chain height remains 10
+		EXPECT_EQ(Height(10), storage.chainHeight());
+
+		// Assert: no uncommitted rollback.journal was created
+		boost::filesystem::path journalPath = boost::filesystem::path(tempDir.name()) / "rollback.journal";
+		EXPECT_FALSE(boost::filesystem::exists(journalPath));
+	}
+
 }}
