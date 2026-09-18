@@ -513,20 +513,31 @@ namespace catapult { namespace io {
 					CATAPULT_LOG(warning) << "failed to unlink temporary rollback journal " << journalTmpPath << ": " << std::strerror(errno);
 			} else {
 				auto err = errno;
-				boost::system::error_code ec;
-				boost::filesystem::remove(journalTmpPath, ec);
-				if (err == EEXIST)
+				auto removeTempJournal = [&journalTmpPath]() {
+					boost::system::error_code ec;
+					boost::filesystem::remove(journalTmpPath, ec);
+				};
+
+				if (err == EEXIST) {
+					removeTempJournal();
 					CATAPULT_THROW_FILE_IO_ERROR("rollback already in progress; recover rollback.journal first");
+				}
 
 				if (err == ENOTSUP || err == EPERM || err == EOPNOTSUPP) {
 					// Fallback for filesystems without hard link support (e.g. FAT/exFAT)
-					if (boost::filesystem::exists(journalPath))
+					if (boost::filesystem::exists(journalPath)) {
+						removeTempJournal();
 						CATAPULT_THROW_FILE_IO_ERROR("rollback already in progress; recover rollback.journal first");
+					}
 
+					boost::system::error_code ec;
 					boost::filesystem::rename(journalTmpPath, journalPath, ec);
-					if (ec)
+					if (ec) {
+						removeTempJournal();
 						CATAPULT_THROW_FILE_IO_ERROR(("failed to atomically rename rollback.journal: " + ec.message()).c_str());
+					}
 				} else {
+					removeTempJournal();
 					CATAPULT_THROW_FILE_IO_ERROR(("failed to atomically publish rollback.journal: " + std::string(std::strerror(err))).c_str());
 				}
 			}
