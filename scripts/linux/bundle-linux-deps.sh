@@ -37,8 +37,9 @@ elif [ -d "${ROCKSDB_ROOT:-$HOME/rocksdb-8.5.3}/lib64" ]; then
 fi
 
 echo "-> Bundling runtime compression & OpenSSL shared libraries..."
+MULTIARCH=$(gcc -print-multiarch 2>/dev/null || echo "x86_64-linux-gnu")
 for lib in libsnappy.so* libzstd.so* libcrypto.so* libssl.so*; do
-    for path in /usr/lib/x86_64-linux-gnu /usr/local/lib /lib/x86_64-linux-gnu; do
+    for path in "/usr/lib/${MULTIARCH}" "/lib/${MULTIARCH}" /usr/lib/aarch64-linux-gnu /lib/aarch64-linux-gnu /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu /usr/local/lib /usr/lib /lib; do
         if compgen -G "${path}/${lib}" > /dev/null; then
             cp -d ${path}/${lib} "${TARGET_DIR}/" 2>/dev/null || true
             break

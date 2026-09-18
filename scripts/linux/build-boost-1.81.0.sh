@@ -36,6 +36,11 @@ cd "boost_${BOOST_UNDERSCORE}"
 echo "-> Bootstrapping Boost build engine..."
 ./bootstrap.sh --prefix="${BOOST_INSTALL_DIR}"
 
+ARCH_OPTS=()
+if [ "$(uname -m)" = "x86_64" ]; then
+    ARCH_OPTS=(cxxflags="-march=x86-64" cxxflags="-mtune=generic" cflags="-march=x86-64" cflags="-mtune=generic")
+fi
+
 echo "-> Compiling and installing Boost libraries..."
 ./b2 --prefix="${BOOST_INSTALL_DIR}" \
     --without-python \
@@ -43,11 +48,8 @@ echo "-> Compiling and installing Boost libraries..."
     threading=multi \
     variant=release \
     cxxflags="-fPIC" \
-    cxxflags="-march=x86-64" \
-    cxxflags="-mtune=generic" \
     cflags="-fPIC" \
-    cflags="-march=x86-64" \
-    cflags="-mtune=generic" \
+    "${ARCH_OPTS[@]}" \
     -j"${CORES}" \
     install
 
