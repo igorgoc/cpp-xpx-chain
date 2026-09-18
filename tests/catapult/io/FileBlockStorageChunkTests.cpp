@@ -196,4 +196,73 @@ TEST(TEST_CLASS, DropBlocksAfterTruncatesFilesAndZerosIndex) {
 	}
 }
 
+TEST(TEST_CLASS, DropBlocksAfterPreservesStatementsOfRetainedBlocksWhenNextBlockHasNoStatement) {
+		// Arrange: prepare storage
+		test::TempDirectoryGuard tempDir;
+		test::PrepareStorage(tempDir.name());
+
+		FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+
+		// Block 1 with Statement
+		TestBlockElementContext block1(Height(1));
+		auto pStatement1 = std::make_shared<model::BlockStatement>();
+		pStatement1->Receipts.emplace(model::ReceiptSource(), std::make_unique<model::Receipt>(model::ReceiptType::Mosaic_Levy, model::ReceiptVersion(1)));
+		const_cast<model::BlockElement&>(block1.get()).OptionalStatement = pStatement1;
+		storage.saveBlock(block1.get());
+
+		// Block 2 WITHOUT Statement
+		TestBlockElementContext block2(Height(2));
+		storage.saveBlock(block2.get());
+
+		// Block 3 WITHOUT Statement
+		TestBlockElementContext block3(Height(3));
+		storage.saveBlock(block3.get());
+
+		// Act: Rollback to block 1
+		storage.dropBlocksAfter(Height(1));
+
+		// Assert: Statement data for block 1 must be preserved and non-empty
+		auto [stmtData, hasStmt] = storage.loadBlockStatementData(Height(1));
+		EXPECT_TRUE(hasStmt);
+		EXPECT_GT(stmtData.size(), 0u);
+
+		auto pLoadedBlock1 = storage.loadBlockElement(Height(1));
+		EXPECT_TRUE(pLoadedBlock1->OptionalStatement != nullptr);
+		EXPECT_EQ(1u, pLoadedBlock1->OptionalStatement->Receipts.size());
+	}
+
+	TEST(TEST_CLASS, DropBlocksAfterTruncatesStatementsToZeroWhenAllRetainedBlocksHaveNoStatement) {
+		// Arrange: prepare storage
+		test::TempDirectoryGuard tempDir;
+		test::PrepareStorage(tempDir.name());
+
+		FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+
+		// Block 1 WITHOUT Statement
+		TestBlockElementContext block1(Height(1));
+		storage.saveBlock(block1.get());
+
+		// Block 2 WITH Statement
+		TestBlockElementContext block2(Height(2));
+		auto pStatement2 = std::make_shared<model::BlockStatement>();
+		pStatement2->Receipts.emplace(model::ReceiptSource(), std::make_unique<model::Receipt>(model::ReceiptType::Mosaic_Levy, model::ReceiptVersion(1)));
+		const_cast<model::BlockElement&>(block2.get()).OptionalStatement = pStatement2;
+		storage.saveBlock(block2.get());
+
+		// Act: Rollback to block 1
+		storage.dropBlocksAfter(Height(1));
+
+		// Assert: Block 1 has no statement and statements.dat is 0 bytes
+		auto [stmtData, hasStmt] = storage.loadBlockStatementData(Height(1));
+		EXPECT_FALSE(hasStmt);
+		EXPECT_EQ(0u, stmtData.size());
+
+		char dirName[16];
+		std::snprintf(dirName, sizeof(dirName), "%05lu", 0u);
+		boost::filesystem::path stmtDatPath = tempDir.name();
+		stmtDatPath /= dirName;
+		stmtDatPath /= "statements.dat";
+		EXPECT_EQ(0u, boost::filesystem::file_size(stmtDatPath));
+	}
+
 }}

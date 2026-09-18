@@ -271,13 +271,13 @@ namespace catapult { namespace io {
 		}
 
 		// 2. Append optional statement payload into chunked statements.dat
+		auto stmtOffset = m_pCachedStmtFile->size();
+		if (stmtOffset > std::numeric_limits<uint32_t>::max())
+			CATAPULT_THROW_RUNTIME_ERROR_1("statements.dat exceeded 4GB for directory at height", height);
+
+		entry.stmtOffset = static_cast<uint32_t>(stmtOffset);
+
 		if (blockElement.OptionalStatement) {
-			auto stmtOffset = m_pCachedStmtFile->size();
-			if (stmtOffset > std::numeric_limits<uint32_t>::max())
-				CATAPULT_THROW_RUNTIME_ERROR_1("statements.dat exceeded 4GB for directory at height", height);
-
-			entry.stmtOffset = static_cast<uint32_t>(stmtOffset);
-
 			m_pCachedStmtFile->seek(stmtOffset);
 			RawFileOutputStreamAdapter streamAdapter(*m_pCachedStmtFile);
 			WriteBlockStatement(streamAdapter, *blockElement.OptionalStatement);
@@ -287,6 +287,8 @@ namespace catapult { namespace io {
 				CATAPULT_THROW_RUNTIME_ERROR_1("statement size exceeded 4GB at height", height);
 
 			entry.stmtSize = static_cast<uint32_t>(stmtSize);
+		} else {
+			entry.stmtSize = 0;
 		}
 
 		// 3. Write index entry into blocks.idx
@@ -365,24 +367,37 @@ namespace catapult { namespace io {
 	void FileBlockStorage::dropBlocksAfter(Height height) {
 		m_hashFile.reset();
 		m_chunkWriter.reset();
-		m_indexFile.set(height.unwrap());
 
-		if (Height(0) == height)
+		if (Height(0) == height) {
+			m_indexFile.set(0);
 			return;
+		}
 
 		auto nextHeight = height + Height(1);
 		BlockChunkIndexEntry nextEntry;
 		if (HasChunkIndexEntry(m_dataDirectory, nextHeight, nextEntry)) {
 			boost::system::error_code ec;
 
+			// Truncate blocks.dat to nextEntry.blockOffset
 			auto blocksDatPath = GetBlocksDatPath(m_dataDirectory, nextHeight);
 			if (boost::filesystem::is_regular_file(blocksDatPath))
 				boost::filesystem::resize_file(blocksDatPath, nextEntry.blockOffset, ec);
 
+			// Truncate statements.dat to the end of the last retained statement within this chunk
+			uint64_t lastRetainedStmtEnd = 0;
+			for (auto h = height; h > Height(0) && (h.unwrap() / Files_Per_Directory == height.unwrap() / Files_Per_Directory); h = h - Height(1)) {
+				BlockChunkIndexEntry retainedEntry;
+				if (HasChunkIndexEntry(m_dataDirectory, h, retainedEntry) && retainedEntry.stmtSize > 0) {
+					lastRetainedStmtEnd = static_cast<uint64_t>(retainedEntry.stmtOffset) + static_cast<uint64_t>(retainedEntry.stmtSize);
+					break;
+				}
+			}
+
 			auto stmtDatPath = GetStatementsDatPath(m_dataDirectory, nextHeight);
 			if (boost::filesystem::is_regular_file(stmtDatPath))
-				boost::filesystem::resize_file(stmtDatPath, nextEntry.stmtOffset, ec);
+				boost::filesystem::resize_file(stmtDatPath, lastRetainedStmtEnd, ec);
 
+			// Zero index entries from nextIndex to EOF
 			auto idxPath = GetBlocksIdxPath(m_dataDirectory, nextHeight);
 			if (boost::filesystem::is_regular_file(idxPath)) {
 				auto nextIndex = nextHeight.unwrap() % Files_Per_Directory;
@@ -397,6 +412,8 @@ namespace catapult { namespace io {
 				} catch (...) {}
 			}
 		}
+
+		m_indexFile.set(height.unwrap());
 	}
 
 	// endregion
