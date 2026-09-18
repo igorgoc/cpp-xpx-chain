@@ -25,16 +25,23 @@
 #include "BufferedFileStream.h"
 #include "FilesystemUtils.h"
 #include "PodIoUtils.h"
+#include <atomic>
 #include <cctype>
 #include <inttypes.h>
+#include <mutex>
 
 #ifdef _WIN32
 #include <io.h>
 #include <fcntl.h>
+#include <share.h>
+#include <process.h>
 #include <windows.h>
+#define GET_PID _getpid
 #else
 #include <fcntl.h>
+#include <sys/file.h>
 #include <unistd.h>
+#define GET_PID getpid
 #endif
 
 namespace catapult { namespace io {
@@ -225,6 +232,43 @@ namespace catapult { namespace io {
 #endif
 		}
 
+		class RollbackLockGuard {
+		public:
+			explicit RollbackLockGuard(const std::string& dataDirectory) {
+				auto lockPath = boost::filesystem::path(dataDirectory) / "rollback.lock";
+#ifdef _WIN32
+				int fd = -1;
+				auto result = _sopen_s(&fd, lockPath.generic_string().c_str(), _O_CREAT | _O_RDWR | _O_BINARY, _SH_DENYRW, _S_IREAD | _S_IWRITE);
+				if (result != 0 || fd == -1)
+					CATAPULT_THROW_FILE_IO_ERROR("concurrent rollback in progress: failed to acquire rollback.lock");
+				m_fd = fd;
+#else
+				int fd = ::open(lockPath.string().c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+				if (fd == -1)
+					CATAPULT_THROW_FILE_IO_ERROR("failed to open rollback.lock");
+				if (::flock(fd, LOCK_EX | LOCK_NB) != 0) {
+					::close(fd);
+					CATAPULT_THROW_FILE_IO_ERROR("concurrent rollback in progress: failed to acquire rollback.lock");
+				}
+				m_fd = fd;
+#endif
+			}
+
+			~RollbackLockGuard() {
+				if (m_fd != -1) {
+#ifdef _WIN32
+					_close(m_fd);
+#else
+					::flock(m_fd, LOCK_UN);
+					::close(m_fd);
+#endif
+				}
+			}
+
+		private:
+			int m_fd = -1;
+		};
+
 		void ValidateRollbackJournal(const std::string& dataDirectory, const RollbackJournalHeader& header, const IndexFile& indexFile) {
 			if (header.magic != Rollback_Journal_Magic || header.version != Rollback_Journal_Version)
 				CATAPULT_THROW_FILE_IO_ERROR("corrupted rollback.journal: invalid magic or version");
@@ -398,18 +442,13 @@ namespace catapult { namespace io {
 		}
 
 		void WriteRollbackJournal(const std::string& dataDirectory, const RollbackJournalHeader& header) {
-			auto journalTmpPath = boost::filesystem::path(dataDirectory) / "rollback.journal.tmp";
+			static std::atomic<uint64_t> s_journalCounter{0};
+			auto uniqueTmpName = "rollback.journal." + std::to_string(GET_PID()) + "." + std::to_string(++s_journalCounter) + ".tmp";
+			auto journalTmpPath = boost::filesystem::path(dataDirectory) / uniqueTmpName;
 			auto journalPath = boost::filesystem::path(dataDirectory) / "rollback.journal";
 
 			if (boost::filesystem::exists(journalPath))
 				CATAPULT_THROW_FILE_IO_ERROR("rollback already in progress; recover rollback.journal first");
-
-			if (boost::filesystem::exists(journalTmpPath)) {
-				boost::system::error_code ec;
-				boost::filesystem::remove(journalTmpPath, ec);
-				if (ec)
-					CATAPULT_THROW_FILE_IO_ERROR(("failed to remove existing rollback.journal.tmp before write: " + ec.message()).c_str());
-			}
 
 #ifdef _WIN32
 			int fd = _open(journalTmpPath.generic_string().c_str(), _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY, _S_IREAD | _S_IWRITE);
@@ -418,39 +457,78 @@ namespace catapult { namespace io {
 			auto written = _write(fd, &header, sizeof(RollbackJournalHeader));
 			if (written != sizeof(RollbackJournalHeader)) {
 				_close(fd);
+				boost::system::error_code ec;
+				boost::filesystem::remove(journalTmpPath, ec);
 				CATAPULT_THROW_FILE_IO_ERROR("failed to write complete rollback.journal.tmp");
 			}
 			HANDLE h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
 			if (h == INVALID_HANDLE_VALUE || !FlushFileBuffers(h)) {
 				_close(fd);
+				boost::system::error_code ec;
+				boost::filesystem::remove(journalTmpPath, ec);
 				CATAPULT_THROW_FILE_IO_ERROR("failed to flush rollback.journal.tmp to disk");
 			}
-			if (_close(fd) != 0)
+			if (_close(fd) != 0) {
+				boost::system::error_code ec;
+				boost::filesystem::remove(journalTmpPath, ec);
 				CATAPULT_THROW_FILE_IO_ERROR("failed to close rollback.journal.tmp");
+			}
+
+			// Atomic publish on Windows: MoveFileExA without MOVEFILE_REPLACE_EXISTING fails if destination exists
+			if (!MoveFileExA(journalTmpPath.generic_string().c_str(), journalPath.generic_string().c_str(), 0)) {
+				auto lastError = GetLastError();
+				boost::system::error_code ec;
+				boost::filesystem::remove(journalTmpPath, ec);
+				if (lastError == ERROR_ALREADY_EXISTS || lastError == ERROR_FILE_EXISTS)
+					CATAPULT_THROW_FILE_IO_ERROR("rollback already in progress; recover rollback.journal first");
+				CATAPULT_THROW_FILE_IO_ERROR("failed to atomically publish rollback.journal");
+			}
 #else
-			int fd = ::open(journalTmpPath.generic_string().c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+			int fd = ::open(journalTmpPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
 			if (fd == -1)
 				CATAPULT_THROW_FILE_IO_ERROR("failed to open rollback.journal.tmp for writing");
 			auto written = ::write(fd, &header, sizeof(RollbackJournalHeader));
 			if (written != sizeof(RollbackJournalHeader)) {
 				::close(fd);
+				boost::system::error_code ec;
+				boost::filesystem::remove(journalTmpPath, ec);
 				CATAPULT_THROW_FILE_IO_ERROR("failed to write complete rollback.journal.tmp");
 			}
 			if (::fsync(fd) != 0) {
 				::close(fd);
+				boost::system::error_code ec;
+				boost::filesystem::remove(journalTmpPath, ec);
 				CATAPULT_THROW_FILE_IO_ERROR("failed to fsync rollback.journal.tmp to disk");
 			}
-			if (::close(fd) != 0)
+			if (::close(fd) != 0) {
+				boost::system::error_code ec;
+				boost::filesystem::remove(journalTmpPath, ec);
 				CATAPULT_THROW_FILE_IO_ERROR("failed to close rollback.journal.tmp");
+			}
+
+			// Atomic publish on POSIX: link() fails with EEXIST if destination exists, eliminating TOCTOU race
+			if (::link(journalTmpPath.c_str(), journalPath.c_str()) == 0) {
+				::unlink(journalTmpPath.c_str());
+			} else {
+				auto err = errno;
+				boost::system::error_code ec;
+				boost::filesystem::remove(journalTmpPath, ec);
+				if (err == EEXIST)
+					CATAPULT_THROW_FILE_IO_ERROR("rollback already in progress; recover rollback.journal first");
+
+				if (err == ENOTSUP || err == EPERM || err == EOPNOTSUPP) {
+					// Fallback for filesystems without hard link support (e.g. FAT/exFAT)
+					if (boost::filesystem::exists(journalPath))
+						CATAPULT_THROW_FILE_IO_ERROR("rollback already in progress; recover rollback.journal first");
+
+					boost::filesystem::rename(journalTmpPath, journalPath, ec);
+					if (ec)
+						CATAPULT_THROW_FILE_IO_ERROR(("failed to atomically rename rollback.journal: " + ec.message()).c_str());
+				} else {
+					CATAPULT_THROW_FILE_IO_ERROR(("failed to atomically publish rollback.journal: " + std::string(std::strerror(err))).c_str());
+				}
+			}
 #endif
-
-			if (boost::filesystem::exists(journalPath))
-				CATAPULT_THROW_FILE_IO_ERROR("rollback already in progress; recover rollback.journal first");
-
-			boost::system::error_code ec;
-			boost::filesystem::rename(journalTmpPath, journalPath, ec);
-			if (ec)
-				CATAPULT_THROW_FILE_IO_ERROR(("failed to atomically rename rollback.journal: " + ec.message()).c_str());
 
 			SyncDirectory(dataDirectory);
 		}
@@ -651,12 +729,22 @@ namespace catapult { namespace io {
 	}
 
 	void FileBlockStorage::recoverUnfinishedRollback() {
-		auto journalTmpPath = boost::filesystem::path(m_dataDirectory) / "rollback.journal.tmp";
-		if (boost::filesystem::exists(journalTmpPath)) {
-			boost::system::error_code ec;
-			boost::filesystem::remove(journalTmpPath, ec);
-			if (ec)
-				CATAPULT_THROW_FILE_IO_ERROR(("failed to remove stale rollback.journal.tmp on startup: " + ec.message()).c_str());
+		std::lock_guard<std::mutex> lock(m_rollbackMutex);
+		RollbackLockGuard fileLock(m_dataDirectory);
+
+		// Clean up any stale temporary journal files
+		if (boost::filesystem::exists(m_dataDirectory) && boost::filesystem::is_directory(m_dataDirectory)) {
+			boost::filesystem::directory_iterator endIt;
+			for (boost::filesystem::directory_iterator it(m_dataDirectory); it != endIt; ++it) {
+				if (boost::filesystem::is_regular_file(it->path())) {
+					auto filename = it->path().filename().string();
+					if (filename == "rollback.journal.tmp" ||
+						(filename.rfind("rollback.journal.", 0) == 0 && filename.length() >= 4 && filename.rfind(".tmp") == filename.length() - 4)) {
+						boost::system::error_code ec;
+						boost::filesystem::remove(it->path(), ec);
+					}
+				}
+			}
 		}
 
 		auto journalPath = boost::filesystem::path(m_dataDirectory) / "rollback.journal";
@@ -725,6 +813,9 @@ namespace catapult { namespace io {
 	}
 
 	void FileBlockStorage::dropBlocksAfter(Height height) {
+		std::lock_guard<std::mutex> lock(m_rollbackMutex);
+		RollbackLockGuard fileLock(m_dataDirectory);
+
 		m_hashFile.reset();
 		m_chunkWriter.reset();
 

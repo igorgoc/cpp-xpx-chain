@@ -22,6 +22,7 @@
 #include "BlockStorage.h"
 #include "IndexFile.h"
 #include "RawFile.h"
+#include <mutex>
 #include <string>
 
 namespace catapult { namespace io {
@@ -101,5 +102,6 @@ namespace catapult { namespace io {
 		HashFile m_hashFile;
 		ChunkWriter m_chunkWriter;
 		IndexFile m_indexFile;
+		mutable std::mutex m_rollbackMutex;
 	};
 }}

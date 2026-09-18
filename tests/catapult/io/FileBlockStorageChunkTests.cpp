@@ -25,8 +25,16 @@
 #include "tests/test/core/StorageTestUtils.h"
 #include "tests/test/nodeps/Filesystem.h"
 #include "tests/TestHarness.h"
+#include <atomic>
 #include <boost/filesystem.hpp>
-#ifndef _WIN32
+#include <thread>
+#ifdef _WIN32
+#include <io.h>
+#include <fcntl.h>
+#include <share.h>
+#else
+#include <fcntl.h>
+#include <sys/file.h>
 #include <unistd.h>
 #endif
 
@@ -931,6 +939,100 @@ TEST(TEST_CLASS, DropBlocksAfterPreservesStatementsOfRetainedBlocksWhenNextBlock
 		// Act & Assert: dropBlocksAfter(Height(10)) or greater must still throw instead of early returning
 		EXPECT_THROW(storage.dropBlocksAfter(Height(10)), catapult_file_io_error);
 		EXPECT_THROW(storage.dropBlocksAfter(Height(15)), catapult_file_io_error);
+	}
+
+	TEST(TEST_CLASS, DropBlocksAfterThrowsIfRollbackLockIsHeld) {
+		// Arrange: prepare storage seeded with 10 blocks in chunk 0
+		test::TempDirectoryGuard tempDir;
+		test::PrepareStorage(tempDir.name());
+
+		{
+			FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+			storage.dropBlocksAfter(Height(0));
+			for (uint32_t i = 1; i <= 10; ++i) {
+				TestBlockElementContext blockCtx((Height(i)));
+				storage.saveBlock(blockCtx.get());
+			}
+			EXPECT_EQ(Height(10), storage.chainHeight());
+		}
+
+		FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+
+		// Manually acquire exclusive lock on rollback.lock (simulating concurrent rollback process)
+		boost::filesystem::path lockPath = boost::filesystem::path(tempDir.name()) / "rollback.lock";
+#ifdef _WIN32
+		int fd = -1;
+		auto result = _sopen_s(&fd, lockPath.generic_string().c_str(), _O_CREAT | _O_RDWR | _O_BINARY, _SH_DENYRW, _S_IREAD | _S_IWRITE);
+		EXPECT_EQ(0, result);
+#else
+		int fd = ::open(lockPath.string().c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+		EXPECT_NE(-1, fd);
+		EXPECT_EQ(0, ::flock(fd, LOCK_EX | LOCK_NB));
+#endif
+
+		// Act & Assert: dropBlocksAfter must reject operation because lock is held by another process
+		EXPECT_THROW(storage.dropBlocksAfter(Height(5)), catapult_file_io_error);
+
+		// Release lock
+#ifdef _WIN32
+		_close(fd);
+#else
+		::flock(fd, LOCK_UN);
+		::close(fd);
+#endif
+
+		// Assert: chain height remains 10
+		EXPECT_EQ(Height(10), storage.chainHeight());
+
+		// Now dropBlocksAfter succeeds after lock is released
+		EXPECT_NO_THROW(storage.dropBlocksAfter(Height(5)));
+		EXPECT_EQ(Height(5), storage.chainHeight());
+	}
+
+	TEST(TEST_CLASS, DropBlocksAfterConcurrentInProcessCallsAreSerialized) {
+		// Arrange: prepare storage seeded with 20 blocks in chunk 0
+		test::TempDirectoryGuard tempDir;
+		test::PrepareStorage(tempDir.name());
+
+		{
+			FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+			storage.dropBlocksAfter(Height(0));
+			for (uint32_t i = 1; i <= 20; ++i) {
+				TestBlockElementContext blockCtx((Height(i)));
+				storage.saveBlock(blockCtx.get());
+			}
+			EXPECT_EQ(Height(20), storage.chainHeight());
+		}
+
+		FileBlockStorage storage(tempDir.name(), FileBlockStorageMode::Hash_Index);
+
+		// Act: 4 concurrent threads calling dropBlocksAfter on same storage instance
+		std::vector<std::thread> threads;
+		std::atomic<uint32_t> successCount{0};
+		std::atomic<uint32_t> errorCount{0};
+
+		for (uint32_t i = 0; i < 4; ++i) {
+			threads.emplace_back([&storage, &successCount, &errorCount]() {
+				try {
+					storage.dropBlocksAfter(Height(5));
+					++successCount;
+				} catch (...) {
+					++errorCount;
+				}
+			});
+		}
+
+		for (auto& t : threads)
+			t.join();
+
+		// Assert: All threads completed without error (first executed rollback, subsequent were serialized no-ops)
+		EXPECT_EQ(4u, successCount);
+		EXPECT_EQ(0u, errorCount);
+		EXPECT_EQ(Height(5), storage.chainHeight());
+
+		// Retained block 5 is loadable and valid
+		auto pBlock5 = storage.loadBlockElement(Height(5));
+		EXPECT_EQ(Height(5), pBlock5->Block.Height);
 	}
 
 }}
