@@ -25,6 +25,7 @@
 #include "BufferedFileStream.h"
 #include "FilesystemUtils.h"
 #include "PodIoUtils.h"
+#include "catapult/utils/Logging.h"
 #include <atomic>
 #include <cctype>
 #include <inttypes.h>
@@ -508,7 +509,8 @@ namespace catapult { namespace io {
 
 			// Atomic publish on POSIX: link() fails with EEXIST if destination exists, eliminating TOCTOU race
 			if (::link(journalTmpPath.c_str(), journalPath.c_str()) == 0) {
-				::unlink(journalTmpPath.c_str());
+				if (::unlink(journalTmpPath.c_str()) != 0)
+					CATAPULT_LOG(warning) << "failed to unlink temporary rollback journal " << journalTmpPath << ": " << std::strerror(errno);
 			} else {
 				auto err = errno;
 				boost::system::error_code ec;
@@ -742,6 +744,8 @@ namespace catapult { namespace io {
 						(filename.rfind("rollback.journal.", 0) == 0 && filename.length() >= 4 && filename.rfind(".tmp") == filename.length() - 4)) {
 						boost::system::error_code ec;
 						boost::filesystem::remove(it->path(), ec);
+						if (ec)
+							CATAPULT_LOG(warning) << "failed to remove stale temporary rollback journal " << it->path() << ": " << ec.message();
 					}
 				}
 			}
