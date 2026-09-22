@@ -104,10 +104,6 @@ namespace catapult { namespace ionet {
 		void removeHandler(PacketType type);
 
 	private:
-		const PacketHandler* findHandler(const Packet& packet) const;
-		const PacketHandler* findRemovableHandler(const Packet& packet) const;
-
-	private:
 		uint32_t m_maxPacketDataSize;
 		std::vector<PacketHandler> m_handlers;
 		std::vector<PacketHandler> m_removableHandlers;
