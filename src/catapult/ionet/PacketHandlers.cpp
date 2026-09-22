@@ -120,22 +120,33 @@ namespace catapult { namespace ionet {
 	}
 
 	bool ServerPacketHandlers::canProcess(const Packet& packet) const {
-		return !!findHandler(packet) || !!findRemovableHandler(packet);
+		auto rawType = utils::to_underlying_type(packet.Type);
+		if (rawType < m_handlers.size() && m_handlers[rawType])
+			return true;
+
+		std::lock_guard<std::mutex> guard(m_mutex);
+		return rawType < m_removableHandlers.size() && !!m_removableHandlers[rawType];
 	}
 
 	bool ServerPacketHandlers::process(const Packet& packet, ContextType& context) const {
-		const auto* pHandler = findHandler(packet);
-		if (!pHandler) {
-			pHandler = findRemovableHandler(packet);
-			if (!pHandler) {
-				CATAPULT_LOG(warning) << "requested unknown handler: " << packet;
-				return m_ignoreUnknownPackets;
-			}
+		PacketHandler handler;
+		auto rawType = utils::to_underlying_type(packet.Type);
+		if (rawType < m_handlers.size() && m_handlers[rawType]) {
+			handler = m_handlers[rawType];
+		} else {
+			std::lock_guard<std::mutex> guard(m_mutex);
+			if (rawType < m_removableHandlers.size() && m_removableHandlers[rawType])
+				handler = m_removableHandlers[rawType];
+		}
+
+		if (!handler) {
+			CATAPULT_LOG(warning) << "requested unknown handler: " << packet;
+			return m_ignoreUnknownPackets;
 		}
 
 		CATAPULT_LOG(trace) << "processing " << packet;
 
-		(*pHandler)(packet, context);
+		handler(packet, context);
 		return true;
 	}
 
@@ -167,25 +178,6 @@ namespace catapult { namespace ionet {
 		auto rawType = utils::to_underlying_type(type);
 		if (rawType < m_removableHandlers.size())
 			m_removableHandlers[rawType] = nullptr;
-	}
-
-	const ServerPacketHandlers::PacketHandler* ServerPacketHandlers::findHandler(const Packet& packet) const {
-		auto rawType = utils::to_underlying_type(packet.Type);
-		if (rawType >= m_handlers.size())
-			return nullptr;
-
-		const auto& handler = m_handlers[rawType];
-		return handler ? &handler : nullptr;
-	}
-
-	const ServerPacketHandlers::PacketHandler* ServerPacketHandlers::findRemovableHandler(const Packet& packet) const {
-		std::lock_guard<std::mutex> guard(m_mutex);
-		auto rawType = utils::to_underlying_type(packet.Type);
-		if (rawType >= m_removableHandlers.size())
-			return nullptr;
-
-		const auto& handler = m_removableHandlers[rawType];
-		return handler ? &handler : nullptr;
 	}
 
 	// endregion
