@@ -104,7 +104,17 @@ namespace catapult { namespace ionet {
 		void removeHandler(PacketType type);
 
 	private:
+		/// Returns a copy of the removable handler registered for \a rawType, or an empty handler when none is
+		/// registered. A copy (rather than a reference) is required because the handler can be unregistered by
+		/// another thread while it is being invoked.
+		PacketHandler tryCopyRemovableHandler(size_t rawType) const;
+
+	private:
 		uint32_t m_maxPacketDataSize;
+
+		// m_handlers is deliberately not guarded by m_mutex; registerHandler is only called during boot, before any
+		// connection is served. m_removableHandlers is registered and removed while packets are in flight, so every
+		// access to it must hold m_mutex and handlers read from it must be copied before being invoked.
 		std::vector<PacketHandler> m_handlers;
 		std::vector<PacketHandler> m_removableHandlers;
 		mutable std::mutex m_mutex;

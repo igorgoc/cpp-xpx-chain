@@ -17,6 +17,7 @@
 #include "catapult/model/BlockUtils.h"
 #include "catapult/utils/StackLogger.h"
 #include "catapult/validators/AggregateEntityValidator.h"
+#include <atomic>
 
 namespace catapult { namespace fastfinality {
 
@@ -279,8 +280,15 @@ namespace catapult { namespace fastfinality {
 			pMessageSender->clearQueue();
 			for (const auto& identityKey : chainSyncData.NodeIdentityKeys) {
 				auto pPromise = std::make_shared<std::promise<std::vector<std::shared_ptr<model::Block>>>>();
-				pFsmShared->packetHandlers().registerRemovableHandler(ionet::PacketType::Pull_Blocks_Response, [pPromise, identityKey, &transactionRegistry = state.pluginManager().transactionRegistry()](
+				auto pIsPromiseSet = std::make_shared<std::atomic_bool>(false);
+				pFsmShared->packetHandlers().registerRemovableHandler(ionet::PacketType::Pull_Blocks_Response, [pPromise, pIsPromiseSet, identityKey, &transactionRegistry = state.pluginManager().transactionRegistry()](
 						const auto& packet, auto& context) {
+					// the handler is copied by ServerPacketHandlers::process, so it can still be dispatched after
+					// removeHandler has returned; setting an already satisfied promise throws std::future_error,
+					// which would escape into the io thread
+					if (pIsPromiseSet->exchange(true))
+						return;
+
 					auto blockRange = ionet::ExtractEntitiesFromPacket<model::Block>(packet, [&transactionRegistry](const model::Block& block) {
 						return IsSizeValid(block, transactionRegistry);
 					});

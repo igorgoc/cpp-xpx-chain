@@ -86,6 +86,7 @@ namespace catapult { namespace ionet {
 		m_handlers = rhs.m_handlers;
 		m_removableHandlers = rhs.m_removableHandlers;
 		m_ignoreUnknownPackets = rhs.m_ignoreUnknownPackets;
+		return *this;
 	}
 
 	ServerPacketHandlers& ServerPacketHandlers::operator=(ServerPacketHandlers&& rhs) {
@@ -93,6 +94,7 @@ namespace catapult { namespace ionet {
 		m_handlers = std::move(rhs.m_handlers);
 		m_removableHandlers = std::move(rhs.m_removableHandlers);
 		m_ignoreUnknownPackets = rhs.m_ignoreUnknownPackets;
+		return *this;
 	}
 
 	size_t ServerPacketHandlers::size() const {
@@ -129,16 +131,18 @@ namespace catapult { namespace ionet {
 	}
 
 	bool ServerPacketHandlers::process(const Packet& packet, ContextType& context) const {
-		PacketHandler handler;
 		auto rawType = utils::to_underlying_type(packet.Type);
+
+		// handlers registered via registerHandler are never removed, so they can be invoked in place
 		if (rawType < m_handlers.size() && m_handlers[rawType]) {
-			handler = m_handlers[rawType];
-		} else {
-			std::lock_guard<std::mutex> guard(m_mutex);
-			if (rawType < m_removableHandlers.size() && m_removableHandlers[rawType])
-				handler = m_removableHandlers[rawType];
+			CATAPULT_LOG(trace) << "processing " << packet;
+			m_handlers[rawType](packet, context);
+			return true;
 		}
 
+		// removable handlers can be unregistered (or the backing vector reallocated) by another thread at any time,
+		// so take a copy under the lock and invoke the copy, which stays valid for the duration of the call
+		auto handler = tryCopyRemovableHandler(rawType);
 		if (!handler) {
 			CATAPULT_LOG(warning) << "requested unknown handler: " << packet;
 			return m_ignoreUnknownPackets;
@@ -178,6 +182,14 @@ namespace catapult { namespace ionet {
 		auto rawType = utils::to_underlying_type(type);
 		if (rawType < m_removableHandlers.size())
 			m_removableHandlers[rawType] = nullptr;
+	}
+
+	ServerPacketHandlers::PacketHandler ServerPacketHandlers::tryCopyRemovableHandler(size_t rawType) const {
+		std::lock_guard<std::mutex> guard(m_mutex);
+		if (rawType >= m_removableHandlers.size())
+			return PacketHandler();
+
+		return m_removableHandlers[rawType];
 	}
 
 	// endregion

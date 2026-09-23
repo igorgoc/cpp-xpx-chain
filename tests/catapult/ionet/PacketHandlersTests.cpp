@@ -20,6 +20,8 @@
 
 #include "tests/test/core/PacketPayloadTestUtils.h"
 #include "tests/TestHarness.h"
+#include <atomic>
+#include <future>
 
 namespace catapult { namespace ionet {
 
@@ -266,6 +268,231 @@ namespace catapult { namespace ionet {
 			// Assert:
 			EXPECT_FALSE(canProcess) << "type " << type;
 		}
+	}
+
+	// endregion
+
+	// region removable handlers
+
+	namespace {
+		constexpr auto Removable_Type = static_cast<PacketType>(3);
+
+		bool ProcessRemovableTypePacket(PacketHandlers& handlers) {
+			Packet packet;
+			packet.Size = sizeof(Packet);
+			packet.Type = Removable_Type;
+
+			auto context = CreateDefaultContext();
+			return handlers.process(packet, context);
+		}
+	}
+
+	TEST(TEST_CLASS, CanAddRemovableHandler) {
+		// Arrange:
+		PacketHandlers handlers;
+
+		// Act:
+		handlers.registerRemovableHandler(Removable_Type, [](const auto&, const auto&) {});
+
+		// Assert:
+		EXPECT_EQ(1u, handlers.size());
+		EXPECT_TRUE(handlers.canProcess(Removable_Type));
+	}
+
+	TEST(TEST_CLASS, CannotAddMultipleRemovableHandlersForSamePacketType) {
+		// Arrange:
+		PacketHandlers handlers;
+		handlers.registerRemovableHandler(Removable_Type, [](const auto&, const auto&) {});
+
+		// Act + Assert:
+		EXPECT_THROW(handlers.registerRemovableHandler(Removable_Type, [](const auto&, const auto&) {}), catapult_runtime_error);
+	}
+
+	TEST(TEST_CLASS, CanProcessPacketWithRemovableHandler) {
+		// Arrange:
+		PacketHandlers handlers;
+		auto numCallbackCalls = 0u;
+		handlers.registerRemovableHandler(Removable_Type, [&numCallbackCalls](const auto&, const auto&) {
+			++numCallbackCalls;
+		});
+
+		// Act:
+		auto isProcessed = ProcessRemovableTypePacket(handlers);
+
+		// Assert:
+		EXPECT_TRUE(isProcessed);
+		EXPECT_EQ(1u, numCallbackCalls);
+	}
+
+	TEST(TEST_CLASS, CannotProcessPacketAfterRemovableHandlerIsRemoved) {
+		// Arrange:
+		PacketHandlers handlers;
+		auto numCallbackCalls = 0u;
+		handlers.registerRemovableHandler(Removable_Type, [&numCallbackCalls](const auto&, const auto&) {
+			++numCallbackCalls;
+		});
+
+		// Act:
+		handlers.removeHandler(Removable_Type);
+		auto isProcessed = ProcessRemovableTypePacket(handlers);
+
+		// Assert:
+		EXPECT_FALSE(isProcessed);
+		EXPECT_EQ(0u, numCallbackCalls);
+		EXPECT_EQ(0u, handlers.size());
+		EXPECT_FALSE(handlers.canProcess(Removable_Type));
+	}
+
+	TEST(TEST_CLASS, RemovingUnregisteredRemovableHandlerHasNoEffect) {
+		// Arrange:
+		PacketHandlers handlers;
+
+		// Act + Assert: no throw
+		handlers.removeHandler(Removable_Type);
+		handlers.removeHandler(static_cast<PacketType>(0xFFFF));
+
+		EXPECT_EQ(0u, handlers.size());
+	}
+
+	TEST(TEST_CLASS, NonRemovableHandlerTakesPrecedenceOverRemovableHandler) {
+		// Arrange:
+		PacketHandlers handlers;
+		auto numHandlerCalls = 0u;
+		auto numRemovableHandlerCalls = 0u;
+		handlers.registerHandler(Removable_Type, [&numHandlerCalls](const auto&, const auto&) {
+			++numHandlerCalls;
+		});
+		handlers.registerRemovableHandler(Removable_Type, [&numRemovableHandlerCalls](const auto&, const auto&) {
+			++numRemovableHandlerCalls;
+		});
+
+		// Act:
+		auto isProcessed = ProcessRemovableTypePacket(handlers);
+
+		// Assert:
+		EXPECT_TRUE(isProcessed);
+		EXPECT_EQ(1u, numHandlerCalls);
+		EXPECT_EQ(0u, numRemovableHandlerCalls);
+	}
+
+	// endregion
+
+	// region removable handlers - concurrent removal
+
+	TEST(TEST_CLASS, CanRemoveRemovableHandlerWhileItIsBeingInvoked) {
+		// Arrange: the handler blocks inside process until the main thread has removed it, so removeHandler must not
+		//          be serialized against the handler invocation
+		PacketHandlers handlers;
+		std::atomic_bool isInHandler(false);
+		std::atomic_bool isRemoved(false);
+		std::atomic_bool wasHandlerCompleted(false);
+
+		handlers.registerRemovableHandler(Removable_Type, [&isInHandler, &isRemoved, &wasHandlerCompleted](
+				const auto&,
+				const auto&) {
+			isInHandler = true;
+			WAIT_FOR_EXPR(isRemoved.load());
+			wasHandlerCompleted = true;
+		});
+
+		// Act: dispatch on another thread and remove the handler while the dispatch is inside it
+		auto future = std::async(std::launch::async, [&handlers]() {
+			return ProcessRemovableTypePacket(handlers);
+		});
+
+		WAIT_FOR_EXPR(isInHandler.load());
+		handlers.removeHandler(Removable_Type);
+		isRemoved = true;
+
+		// Assert: the in flight dispatch ran to completion and reported success
+		EXPECT_TRUE(future.get());
+		EXPECT_TRUE(wasHandlerCompleted.load());
+		EXPECT_EQ(0u, handlers.size());
+	}
+
+	TEST(TEST_CLASS, RemovableHandlerCapturedStateOutlivesConcurrentRemoval) {
+		// Arrange: the handler owns the only reference to pSentinel, so the handler copy taken by process is what
+		//          keeps the captured state alive once removeHandler destroys the registered handler
+		PacketHandlers handlers;
+		auto pSentinel = std::make_shared<uint32_t>(0x11223344);
+		std::weak_ptr<uint32_t> pSentinelWeak = pSentinel;
+
+		std::atomic_bool isInHandler(false);
+		std::atomic_bool isRemoved(false);
+		std::atomic<uint32_t> observedSentinel(0);
+
+		handlers.registerRemovableHandler(Removable_Type, [pSentinel, &isInHandler, &isRemoved, &observedSentinel](
+				const auto&,
+				const auto&) {
+			isInHandler = true;
+			WAIT_FOR_EXPR(isRemoved.load());
+			observedSentinel = *pSentinel;
+		});
+		pSentinel.reset();
+		EXPECT_FALSE(pSentinelWeak.expired());
+
+		// Act:
+		auto future = std::async(std::launch::async, [&handlers]() {
+			return ProcessRemovableTypePacket(handlers);
+		});
+
+		WAIT_FOR_EXPR(isInHandler.load());
+		handlers.removeHandler(Removable_Type);
+		isRemoved = true;
+
+		// Assert: the captured state was still readable after the handler was unregistered
+		EXPECT_TRUE(future.get());
+		EXPECT_EQ(0x11223344u, observedSentinel.load());
+
+		// - and it is released once the in flight copy goes away
+		EXPECT_TRUE(pSentinelWeak.expired());
+	}
+
+	TEST(TEST_CLASS, CanProcessConcurrentlyWithRemovableHandlerRegistration) {
+		// Arrange: dispatch to a permanently registered removable handler on one thread while another thread
+		//          registers and removes ever higher packet types, forcing m_removableHandlers to grow and
+		//          reallocate underneath the in flight lookup
+		constexpr auto Num_Iterations = 1000u;
+		constexpr auto Max_Dispatches = 1'000'000u;
+
+		PacketHandlers handlers;
+		std::atomic_bool isDone(false);
+		std::atomic<uint32_t> numHandlerCalls(0);
+		handlers.registerRemovableHandler(Removable_Type, [&numHandlerCalls](const auto&, const auto&) {
+			++numHandlerCalls;
+		});
+
+		auto future = std::async(std::launch::async, [&handlers, &isDone]() {
+			auto numDispatches = 0u;
+			while (!isDone && numDispatches < Max_Dispatches) {
+				if (!ProcessRemovableTypePacket(handlers))
+					CATAPULT_THROW_RUNTIME_ERROR("removable handler was not dispatched");
+
+				++numDispatches;
+			}
+
+			return numDispatches;
+		});
+
+		// - wait for the dispatching thread to make progress so the churn below actually overlaps with it
+		WAIT_FOR_EXPR(numHandlerCalls.load() > 0u);
+
+		// Act:
+		for (auto i = 0u; i < Num_Iterations; ++i) {
+			auto growthType = static_cast<PacketType>(0x1000 + i);
+			handlers.registerRemovableHandler(growthType, [](const auto&, const auto&) {});
+			handlers.removeHandler(growthType);
+		}
+
+		isDone = true;
+
+		// Assert: every dispatch found and invoked the handler, and the racing thread made progress
+		auto numDispatches = future.get();
+		EXPECT_LT(0u, numDispatches);
+		EXPECT_EQ(numDispatches, numHandlerCalls.load());
+
+		handlers.removeHandler(Removable_Type);
+		EXPECT_EQ(0u, handlers.size());
 	}
 
 	// endregion
