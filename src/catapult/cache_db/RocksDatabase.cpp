@@ -91,7 +91,7 @@ namespace catapult { namespace cache {
 		rocksdb::Options dbOptions;
 		dbOptions.create_if_missing = true;
 		dbOptions.create_missing_column_families = true;
-		dbOptions.max_open_files = 1024;
+		dbOptions.max_open_files = 1800;
 
 		rocksdb::ColumnFamilyOptions defaultColumnOptions;
 		defaultColumnOptions.compaction_filter = m_pruningFilter.compactionFilter();
