@@ -31,6 +31,7 @@ namespace catapult { namespace dbrb {
 		struct Message {
 			dbrb::Payload Payload;
 			bool DropOnFailure;
+			uint32_t RetryCount = 0;
 		};
 
 		class MessageGroup {
@@ -71,8 +72,8 @@ namespace catapult { namespace dbrb {
 			MessageBuffer() : m_size(0) {}
 
 		public:
-			void enqueue(const Payload& payload, bool dropOnFailure, const std::set<ProcessId>& recipients) {
-				Message message{ payload, dropOnFailure };
+			void enqueue(const Payload& payload, bool dropOnFailure, const std::set<ProcessId>& recipients, uint32_t retryCount = 0) {
+				Message message{ payload, dropOnFailure, retryCount };
 				for (const auto& recipient : recipients) {
 					bool groupNotFound = true;
 					for (auto& messageGroup : m_buffer) {
@@ -252,7 +253,7 @@ namespace catapult { namespace dbrb {
 
 			for (const auto& messageGroup : m_failedMessageBuffer.groups()) {
 				for (const auto& [recipient, message] : messageGroup.messages())
-					m_buffer.enqueue(message.Payload, message.DropOnFailure, { recipient });
+					m_buffer.enqueue(message.Payload, message.DropOnFailure, { recipient }, message.RetryCount);
 			}
 
 			m_failedMessageBuffer.clear();
@@ -314,14 +315,21 @@ namespace catapult { namespace dbrb {
 					CATAPULT_LOG(trace) << "[MESSAGE SENDER] sending " << *message.Payload << " to " << recipient;
 					pWriters->write(recipient, ionet::PacketPayload(message.Payload), [pThisWeak = weak_from_this(), message, recipient](ionet::SocketOperationCode code) {
 						if (code != ionet::SocketOperationCode::Success) {
-							CATAPULT_LOG(warning) << "[MESSAGE SENDER] sending " << *message.Payload << " to " << recipient << " completed with " << code;
+							CATAPULT_LOG(debug) << "[MESSAGE SENDER] sending " << *message.Payload << " to " << recipient << " completed with " << code;
 							auto pThis = pThisWeak.lock();
 							if (pThis && !message.DropOnFailure) {
-								{
-									std::unique_lock lock(pThis->m_messageMutex);
-									pThis->m_failedMessageBuffer.enqueue(message.Payload, false, { recipient });
+								constexpr uint32_t Max_Message_Retries = 5;
+								if (message.RetryCount < Max_Message_Retries) {
+									auto retryMessage = message;
+									retryMessage.RetryCount++;
+									{
+										std::unique_lock lock(pThis->m_messageMutex);
+										pThis->m_failedMessageBuffer.enqueue(retryMessage.Payload, false, { recipient }, retryMessage.RetryCount);
+									}
+									pThis->startResendMessagesTimer();
+								} else {
+									CATAPULT_LOG(debug) << "[MESSAGE SENDER] dropping message to " << recipient << " after " << Max_Message_Retries << " retries";
 								}
-								pThis->startResendMessagesTimer();
 							}
 						}
 					});

@@ -60,7 +60,10 @@ namespace catapult { namespace fastfinality {
 			auto pMutex = std::make_shared<std::mutex>();
 			std::weak_ptr<std::mutex> pMutexWeak = pMutex;
 			auto pReadyPromise = std::make_shared<std::promise<bool>>();
-			pFsmShared->packetHandlers().registerRemovableHandler(ionet::PacketType::Pull_Remote_Node_State_Response, [pNodeStatesWeak, pMutexWeak, pReadyPromise, count = view.size()](
+			auto count = view.size();
+			auto quorumCount = count > 3 ? std::min(dbrb::View::quorumSize(count), size_t(3)) : count;
+			auto pIsPromiseFulfilled = std::make_shared<bool>(false);
+			pFsmShared->packetHandlers().registerRemovableHandler(ionet::PacketType::Pull_Remote_Node_State_Response, [pNodeStatesWeak, pMutexWeak, pReadyPromise, pIsPromiseFulfilled, count, quorumCount](
 					const auto& packet, auto& context) {
 				auto pNodeStates = pNodeStatesWeak.lock();
 				auto pMutex = pMutexWeak.lock();
@@ -76,13 +79,15 @@ namespace catapult { namespace fastfinality {
 				state.NodeWorkState = pResponse->NodeWorkState;
 				pNodeStates->push_back(state);
 				CATAPULT_LOG(debug) << "retrieved node state from " << state.NodeKey << " (" << pNodeStates->size() << "/" << count << ")";
-				if (pNodeStates->size() == count)
+				if (!*pIsPromiseFulfilled && pNodeStates->size() >= quorumCount) {
+					*pIsPromiseFulfilled = true;
 					pReadyPromise->set_value(true);
+				}
 			});
 			auto pPacket = ionet::CreateSharedPacket<RemoteNodeStatePacket>();
 			pPacket->Height = chainHeight + Height(config.Node.MaxBlocksPerSyncAttempt);
 			dbrbProcess.messageSender()->enqueue(pPacket, true, view);
-			pReadyPromise->get_future().template wait_for(std::chrono::seconds(5));
+			pReadyPromise->get_future().wait_for(std::chrono::seconds(15));
 
 			pFsmShared->packetHandlers().removeHandler(ionet::PacketType::Pull_Remote_Node_State_Response);
 

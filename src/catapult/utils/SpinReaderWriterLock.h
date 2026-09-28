@@ -27,7 +27,7 @@
 namespace catapult { namespace utils {
 
 #ifndef DEADLOCK_THRESHOLD_MILLISECONDS
-#define DEADLOCK_THRESHOLD_MILLISECONDS 10 * 60 * 1000 // 10 minutes
+#define DEADLOCK_THRESHOLD_MILLISECONDS 30 * 60 * 1000 // 30 minutes
 #endif
 
 	// minutes before we declare waiting for lock as deadlock
@@ -54,8 +54,16 @@ namespace catapult { namespace utils {
 	private:
 #pragma push_macro("Yield")
 #undef Yield
-		static void Yield() {
-			std::this_thread::yield();
+		static void Yield(size_t spinCount = 0) {
+			if (spinCount < 16) {
+				std::this_thread::yield();
+			} else if (spinCount < 32) {
+				std::this_thread::sleep_for(std::chrono::microseconds(50));
+			} else if (spinCount < 64) {
+				std::this_thread::sleep_for(std::chrono::microseconds(250));
+			} else {
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
 		}
 #pragma pop_macro("Yield")
 
@@ -201,6 +209,7 @@ namespace catapult { namespace utils {
 			uint16_t current = m_value;
 			auto start = std::chrono::high_resolution_clock::now();
 			auto end = start + deadlock_threshold;
+			size_t spinCount = 0;
 
 			for (;;) {
 				if (std::chrono::high_resolution_clock::now() > end)
@@ -208,7 +217,7 @@ namespace catapult { namespace utils {
 
 				// wait for any pending writes to complete
 				if (0 != (current & Pending_Writer_Mask)) {
-					Yield();
+					Yield(spinCount++);
 					current = m_value;
 					continue;
 				}
@@ -218,7 +227,7 @@ namespace catapult { namespace utils {
 				if (m_value.compare_exchange_strong(current, desired))
 					break;
 
-				Yield();
+				Yield(spinCount++);
 			}
 
 			return ReaderLockGuard(m_value, *this);
@@ -240,12 +249,13 @@ namespace catapult { namespace utils {
 			uint16_t expected = value & Pending_Writer_Mask;
 			auto start = std::chrono::high_resolution_clock::now();
 			auto end = start + deadlock_threshold;
+			size_t spinCount = 0;
 
 			while (!value.compare_exchange_strong(expected, expected | Active_Writer_Flag)) {
 				if (std::chrono::high_resolution_clock::now() > end)
 					CATAPULT_THROW_RUNTIME_ERROR("Deadlock occur waiting for writer lock");
 
-				Yield();
+				Yield(spinCount++);
 				expected = value & Pending_Writer_Mask;
 			}
 		}

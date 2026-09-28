@@ -28,6 +28,9 @@
 #include "catapult/thread/ThreadInfo.h"
 #include "catapult/utils/ExceptionLogging.h"
 #include "catapult/version/version.h"
+#ifndef _WIN32
+#include <sys/resource.h>
+#endif
 
 namespace catapult { namespace process {
 
@@ -90,6 +93,13 @@ namespace catapult { namespace process {
 			ProcessOptions processOptions,
 			const CreateProcessHostConfig& createProcessConfig,
 			const CreateProcessHost& createProcessHost) {
+#ifndef _WIN32
+		struct rlimit fileLimit;
+		if (0 == getrlimit(RLIMIT_NOFILE, &fileLimit)) {
+			fileLimit.rlim_cur = fileLimit.rlim_max;
+			setrlimit(RLIMIT_NOFILE, &fileLimit);
+		}
+#endif
 		std::set_terminate(&TerminateHandler);
 		thread::SetThreadName("Process Main (" + host + ")");
 		version::WriteVersionInformation(std::cout);
@@ -101,6 +111,11 @@ namespace catapult { namespace process {
 
 		// 2. initialize logging
 		auto pLoggingGuard = SetupLogging(pConfigHolder->Config().Logging);
+#ifndef _WIN32
+		if (0 == getrlimit(RLIMIT_NOFILE, &fileLimit)) {
+			CATAPULT_LOG(info) << "Process file descriptor limit (RLIMIT_NOFILE): cur=" << fileLimit.rlim_cur << ", max=" << fileLimit.rlim_max;
+		}
+#endif
 
 		// 3. check instance
 		boost::filesystem::path lockFilePath = pConfigHolder->Config().User.DataDirectory;
