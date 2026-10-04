@@ -39,16 +39,19 @@ namespace catapult { namespace harvesting {
 		LOAD_HARVESTING_PROPERTY(IsAutoHarvestingEnabled);
 		LOAD_HARVESTING_PROPERTY(MaxUnlockedAccounts);
 		LOAD_HARVESTING_PROPERTY(Beneficiary);
+		utils::TryLoadIniProperty(bag, "harvesting", "DelegatedKeysDirectory", config.DelegatedKeysDirectory);
 
 #undef LOAD_HARVESTING_PROPERTY
 
-		utils::VerifyBagSizeLte(bag, 4);
+		utils::VerifyBagSizeLte(bag, 5);
 		return config;
 	}
 
 #undef LOAD_PROPERTY
 
 	HarvestingConfiguration HarvestingConfiguration::LoadFromPath(const boost::filesystem::path& resourcesPath) {
-		return config::LoadIniConfiguration<HarvestingConfiguration>(resourcesPath / "config-harvesting.properties");
+		auto config = config::LoadIniConfiguration<HarvestingConfiguration>(resourcesPath / "config-harvesting.properties");
+		config.ResourcesPath = resourcesPath;
+		return config;
 	}
 }}

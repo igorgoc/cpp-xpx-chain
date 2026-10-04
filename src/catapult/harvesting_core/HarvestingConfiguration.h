@@ -41,6 +41,12 @@ namespace catapult { namespace harvesting {
 		/// Public key of the account receiving part of the harvested fee.
 		std::string Beneficiary;
 
+		/// Directory containing delegated harvester key files (*.key).
+		std::string DelegatedKeysDirectory;
+
+		/// Resources path from which configuration was loaded.
+		boost::filesystem::path ResourcesPath;
+
 	private:
 		HarvestingConfiguration() = default;
 
