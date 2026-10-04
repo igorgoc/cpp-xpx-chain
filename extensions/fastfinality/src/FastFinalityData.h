@@ -14,6 +14,7 @@
 #include <shared_mutex>
 #include <set>
 #include <future>
+#include <boost/filesystem/path.hpp>
 
 namespace catapult {
 	namespace crypto { class KeyPair; }
@@ -49,6 +50,14 @@ namespace catapult { namespace fastfinality {
 
 		const auto& unlockedAccounts() const {
 			return m_pUnlockedAccounts;
+		}
+
+		void setDelegatedKeysDirectory(const boost::filesystem::path& keysDir) {
+			m_delegatedKeysDirectory = keysDir;
+		}
+
+		const auto& delegatedKeysDirectory() const {
+			return m_delegatedKeysDirectory;
 		}
 
 		void setRound(const FastFinalityRound& round) {
@@ -147,6 +156,7 @@ namespace catapult { namespace fastfinality {
 		std::atomic<FastFinalityRound> m_round;
 		Key m_beneficiary;
 		std::shared_ptr<harvesting::UnlockedAccounts> m_pUnlockedAccounts;
+		boost::filesystem::path m_delegatedKeysDirectory;
 		const crypto::KeyPair* m_pBlockProducer;
 		Hash256 m_proposedBlockHash;
 		std::shared_ptr<std::promise<bool>> m_pBlockPromise;

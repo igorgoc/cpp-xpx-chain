@@ -163,6 +163,7 @@ namespace catapult { namespace fastfinality {
 				auto& fastFinalityData = pFsmShared->fastFinalityData();
 				fastFinalityData.setUnlockedAccounts(pUnlockedAccounts);
 				fastFinalityData.setBeneficiary(crypto::ParseKey(m_harvestingConfig.Beneficiary));
+				fastFinalityData.setDelegatedKeysDirectory(GetDelegatedKeysDirectory(m_harvestingConfig));
 				auto& actions = pFsmShared->actions();
 				auto remoteNodeStateRetriever = CreateRemoteNodeStateRetriever<FastFinalityFsm>(pFsmShared, pConfigHolder, lastBlockElementSupplier);
 

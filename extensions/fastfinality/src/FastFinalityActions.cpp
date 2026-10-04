@@ -419,6 +419,8 @@ namespace catapult { namespace fastfinality {
 		return [pFsmWeak, lastBlockElementSupplier, &state]() {
 			TRY_GET_FSM()
 
+			SyncDelegatedHarvesterKeys(*pFsmShared->fastFinalityData().unlockedAccounts(), pFsmShared->fastFinalityData().delegatedKeysDirectory());
+
 		  	pFsmShared->resetChainSyncData();
 			pFsmShared->setNodeWorkState(NodeWorkState::Running);
 			auto& committeeManager = state.pluginManager().getCommitteeManager(Block_Version);
@@ -593,6 +595,7 @@ namespace catapult { namespace fastfinality {
 			auto committee = pluginManager.getCommitteeManager(Block_Version).committee();
 			auto round = fastFinalityData.round();
 			const auto& blockProducer = committee.BlockProposers[round.TimeSliceIndex];
+			SyncDelegatedHarvesterKeys(*fastFinalityData.unlockedAccounts(), fastFinalityData.delegatedKeysDirectory());
 
 			auto accounts = fastFinalityData.unlockedAccounts()->view();
 			auto blockProducerIter = std::find_if(accounts.begin(), accounts.end(), [&committee, &blockProducer](const auto& keyPair) {

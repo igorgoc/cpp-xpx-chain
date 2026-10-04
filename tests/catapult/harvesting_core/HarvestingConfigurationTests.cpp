@@ -37,7 +37,8 @@ namespace catapult { namespace harvesting {
 							{ "harvestKey", "harvest-key" },
 							{ "isAutoHarvestingEnabled", "true" },
 							{ "maxUnlockedAccounts", "2" },
-							{ "beneficiary", "beneficiary-key" }
+							{ "beneficiary", "beneficiary-key" },
+							{ "delegatedKeysDirectory", "keys-dir" }
 						}
 					}
 				};
@@ -47,8 +48,8 @@ namespace catapult { namespace harvesting {
 				return false;
 			}
 
-			static bool IsPropertyOptional(const std::string&) {
-				return false;
+			static bool IsPropertyOptional(const std::string& name) {
+				return "delegatedKeysDirectory" == name;
 			}
 
 			static bool IsSectionOptional(const std::string&) {
@@ -61,6 +62,7 @@ namespace catapult { namespace harvesting {
 				EXPECT_FALSE(config.IsAutoHarvestingEnabled);
 				EXPECT_EQ(0u, config.MaxUnlockedAccounts);
 				EXPECT_EQ("", config.Beneficiary);
+				EXPECT_EQ("", config.DelegatedKeysDirectory);
 			}
 
 			static void AssertCustom(const HarvestingConfiguration& config) {
@@ -69,6 +71,7 @@ namespace catapult { namespace harvesting {
 				EXPECT_TRUE(config.IsAutoHarvestingEnabled);
 				EXPECT_EQ(2u, config.MaxUnlockedAccounts);
 				EXPECT_EQ("beneficiary-key", config.Beneficiary);
+				EXPECT_EQ("keys-dir", config.DelegatedKeysDirectory);
 			}
 		};
 	}
