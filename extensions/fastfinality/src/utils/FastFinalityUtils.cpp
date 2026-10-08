@@ -6,15 +6,6 @@
 
 #include "FastFinalityUtils.h"
 #include "catapult/crypto/KeyPair.h"
-#include "catapult/extensions/ServiceState.h"
-#include "catapult/extensions/ExecutionConfigurationFactory.h"
-#include "catapult/handlers/ChainHandlers.h"
-#include "catapult/harvesting_core/HarvestingConfiguration.h"
-#include "catapult/harvesting_core/HarvestingUtFacadeFactory.h"
-#include "catapult/harvesting_core/UnlockedAccounts.h"
-
-#include "FastFinalityUtils.h"
-#include "catapult/crypto/KeyPair.h"
 #include "catapult/crypto/KeyUtils.h"
 #include "catapult/extensions/ServiceState.h"
 #include "catapult/extensions/ExecutionConfigurationFactory.h"
@@ -22,6 +13,7 @@
 #include "catapult/harvesting_core/HarvestingConfiguration.h"
 #include "catapult/harvesting_core/HarvestingUtFacadeFactory.h"
 #include "catapult/harvesting_core/UnlockedAccounts.h"
+#include "catapult/utils/ArraySet.h"
 #include <boost/filesystem.hpp>
 #include <fstream>
 #include <cctype>
@@ -55,6 +47,8 @@ namespace catapult { namespace fastfinality {
 
 		lastCheckTime = currentWriteTime;
 
+		utils::KeySet keysOnDisk;
+
 		for (boost::filesystem::directory_iterator it(keysDir, ec), end; it != end && !ec; it.increment(ec)) {
 			if (!boost::filesystem::is_regular_file(it->status()) || it->path().extension() != ".key")
 				continue;
@@ -79,6 +73,11 @@ namespace catapult { namespace fastfinality {
 
 					auto keyPair = crypto::KeyPair::FromString(line);
 					auto publicKey = keyPair.publicKey();
+					keysOnDisk.insert(publicKey);
+
+					// Skip if already in unlockedAccounts to avoid duplicate log spam
+					if (unlockedAccounts.view().contains(publicKey))
+						continue;
 
 					auto result = unlockedAccounts.modifier().add(std::move(keyPair));
 					if (harvesting::UnlockedAccountsAddResult::Success == result) {
@@ -92,6 +91,11 @@ namespace catapult { namespace fastfinality {
 				CATAPULT_LOG(warning) << "Error reading key file " << it->path() << ": " << e.what();
 			}
 		}
+
+		// Prune any accounts in unlockedAccounts that were deleted from disk
+		unlockedAccounts.modifier().removeIf([&keysOnDisk](const auto& key) {
+			return keysOnDisk.find(key) == keysOnDisk.end();
+		});
 	}
 
 	std::shared_ptr<harvesting::UnlockedAccounts> CreateUnlockedAccounts(const harvesting::HarvestingConfiguration& config) {

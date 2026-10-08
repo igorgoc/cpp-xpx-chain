@@ -27,6 +27,7 @@
 #include "catapult/extensions/ServiceLocator.h"
 #include "catapult/extensions/ServiceState.h"
 #include "catapult/io/BlockStorageCache.h"
+#include "catapult/utils/ArraySet.h"
 #include <boost/filesystem.hpp>
 #include <fstream>
 #include <cctype>
@@ -120,6 +121,7 @@ namespace catapult { namespace harvesting {
 		void SyncDelegatedHarvesterKeys(
 				UnlockedAccounts& unlockedAccounts,
 				const boost::filesystem::path& keysDir,
+				const Key& primaryHarvestKey,
 				std::time_t& lastCheckTime,
 				uint32_t& tickCounter,
 				const cache::CatapultCache& cache,
@@ -146,6 +148,8 @@ namespace catapult { namespace harvesting {
 			auto minHarvesterBalance = pConfigHolder->Config(height).Network.MinHarvesterBalance;
 			cache::ImportanceView view(readOnlyAccountStateCache);
 
+			utils::KeySet keysOnDisk;
+
 			for (boost::filesystem::directory_iterator it(keysDir, ec), end; it != end && !ec; it.increment(ec)) {
 				if (!boost::filesystem::is_regular_file(it->status()) || it->path().extension() != ".key")
 					continue;
@@ -170,6 +174,11 @@ namespace catapult { namespace harvesting {
 
 						auto keyPair = crypto::KeyPair::FromString(line);
 						auto publicKey = keyPair.publicKey();
+						keysOnDisk.insert(publicKey);
+
+						// Skip if account is already unlocked to eliminate periodic log spam
+						if (unlockedAccounts.view().contains(publicKey))
+							continue;
 
 						// Check if account can harvest before unlocking
 						if (!view.canHarvest(publicKey, height, minHarvesterBalance)) {
@@ -190,13 +199,21 @@ namespace catapult { namespace harvesting {
 					CATAPULT_LOG(warning) << "Error reading key file " << it->path() << ": " << e.what();
 				}
 			}
+
+			// Prune any accounts in unlockedAccounts that were deleted from disk (except the primary harvest key)
+			unlockedAccounts.modifier().removeIf([&keysOnDisk, &primaryHarvestKey](const auto& key) {
+				if (key == primaryHarvestKey)
+					return false;
+				return keysOnDisk.find(key) == keysOnDisk.end();
+			});
 		}
 
 		thread::Task CreateHarvestingTask(
 				extensions::ServiceState& state,
 				UnlockedAccounts& unlockedAccounts,
 				const Key& beneficiary,
-				const boost::filesystem::path& keysDir) {
+				const boost::filesystem::path& keysDir,
+				const Key& primaryHarvestKey) {
 			const auto& cache = state.cache();
 			const auto& pConfigHolder = state.pluginManager().configHolder();
 			const auto& utCache = state.utCache();
@@ -211,12 +228,12 @@ namespace catapult { namespace harvesting {
 
 			auto pState = std::make_shared<std::pair<std::time_t, uint32_t>>(0, 0);
 
-			return thread::CreateNamedTask("harvesting task", [&cache, &unlockedAccounts, pHarvesterTask, pConfigHolder, keysDir, pState]() {
+			return thread::CreateNamedTask("harvesting task", [&cache, &unlockedAccounts, pHarvesterTask, pConfigHolder, keysDir, primaryHarvestKey, pState]() {
 				// prune accounts that are not eligible to harvest the next block
 				PruneUnlockedAccounts(unlockedAccounts, cache, pConfigHolder);
 
-				// hot-reload new delegated accounts from keys directory
-				SyncDelegatedHarvesterKeys(unlockedAccounts, keysDir, pState->first, pState->second, cache, pConfigHolder);
+				// hot-reload new delegated accounts from keys directory and prune deleted files
+				SyncDelegatedHarvesterKeys(unlockedAccounts, keysDir, primaryHarvestKey, pState->first, pState->second, cache, pConfigHolder);
 
 				// harvest the next block
 				pHarvesterTask->harvest();
@@ -247,7 +264,12 @@ namespace catapult { namespace harvesting {
 				// add tasks
 				auto keysDir = GetDelegatedKeysDirectory(m_config);
 				auto beneficiary = crypto::ParseKey(m_config.Beneficiary);
-				state.tasks().push_back(CreateHarvestingTask(state, *pUnlockedAccounts, beneficiary, keysDir));
+				Key primaryHarvestKey{};
+				if (m_config.IsAutoHarvestingEnabled && crypto::IsValidKeyString(m_config.HarvestKey)) {
+					primaryHarvestKey = crypto::KeyPair::FromString(m_config.HarvestKey).publicKey();
+				}
+
+				state.tasks().push_back(CreateHarvestingTask(state, *pUnlockedAccounts, beneficiary, keysDir, primaryHarvestKey));
 			}
 
 		private:
