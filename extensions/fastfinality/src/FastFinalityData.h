@@ -68,6 +68,14 @@ namespace catapult { namespace fastfinality {
 			return m_round.load();
 		}
 
+		void setPrimaryHarvestKey(const Key& primaryHarvestKey) {
+			m_primaryHarvestKey = primaryHarvestKey;
+		}
+
+		const auto& primaryHarvestKey() const {
+			return m_primaryHarvestKey;
+		}
+
 		void setBlockProducer(const crypto::KeyPair* pBlockProducer) {
 			m_pBlockProducer = pBlockProducer;
 		}
@@ -156,6 +164,7 @@ namespace catapult { namespace fastfinality {
 		std::atomic<FastFinalityRound> m_round;
 		Key m_beneficiary;
 		std::shared_ptr<harvesting::UnlockedAccounts> m_pUnlockedAccounts;
+		Key m_primaryHarvestKey;
 		boost::filesystem::path m_delegatedKeysDirectory;
 		const crypto::KeyPair* m_pBlockProducer;
 		Hash256 m_proposedBlockHash;

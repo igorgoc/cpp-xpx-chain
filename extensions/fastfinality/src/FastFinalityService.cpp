@@ -164,6 +164,11 @@ namespace catapult { namespace fastfinality {
 				fastFinalityData.setUnlockedAccounts(pUnlockedAccounts);
 				fastFinalityData.setBeneficiary(crypto::ParseKey(m_harvestingConfig.Beneficiary));
 				fastFinalityData.setDelegatedKeysDirectory(GetDelegatedKeysDirectory(m_harvestingConfig));
+				Key primaryHarvestKey{};
+				if (m_harvestingConfig.IsAutoHarvestingEnabled && crypto::IsValidKeyString(m_harvestingConfig.HarvestKey)) {
+					primaryHarvestKey = crypto::KeyPair::FromString(m_harvestingConfig.HarvestKey).publicKey();
+				}
+				fastFinalityData.setPrimaryHarvestKey(primaryHarvestKey);
 				auto& actions = pFsmShared->actions();
 				auto remoteNodeStateRetriever = CreateRemoteNodeStateRetriever<FastFinalityFsm>(pFsmShared, pConfigHolder, lastBlockElementSupplier);
 

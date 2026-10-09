@@ -106,13 +106,18 @@ namespace catapult { namespace harvesting {
 			return options;
 		}
 
-		void PruneUnlockedAccounts(UnlockedAccounts& unlockedAccounts, const cache::CatapultCache& cache,
-				const std::shared_ptr<config::BlockchainConfigurationHolder>& pConfigHolder) {
+		void PruneUnlockedAccounts(
+				UnlockedAccounts& unlockedAccounts,
+				const cache::CatapultCache& cache,
+				const std::shared_ptr<config::BlockchainConfigurationHolder>& pConfigHolder,
+				const Key& primaryHarvestKey) {
 			auto cacheView = cache.createView();
 			auto height = cacheView.height() + Height(1);
 			auto readOnlyAccountStateCache = cache::ReadOnlyAccountStateCache(cacheView.sub<cache::AccountStateCache>());
 			auto minHarvesterBalance = pConfigHolder->Config(height).Network.MinHarvesterBalance;
-			unlockedAccounts.modifier().removeIf([height, minHarvesterBalance, &readOnlyAccountStateCache](const auto& key) {
+			unlockedAccounts.modifier().removeIf([height, minHarvesterBalance, &readOnlyAccountStateCache, &primaryHarvestKey](const auto& key) {
+				if (key == primaryHarvestKey)
+					return false;
 				cache::ImportanceView view(readOnlyAccountStateCache);
 				return !view.canHarvest(key, height, minHarvesterBalance);
 			});
@@ -228,9 +233,11 @@ namespace catapult { namespace harvesting {
 
 			auto pState = std::make_shared<std::pair<std::time_t, uint32_t>>(0, 0);
 
-			return thread::CreateNamedTask("harvesting task", [&cache, &unlockedAccounts, pHarvesterTask, pConfigHolder, keysDir, primaryHarvestKey, pState]() {
-				// prune accounts that are not eligible to harvest the next block
-				PruneUnlockedAccounts(unlockedAccounts, cache, pConfigHolder);
+			auto isChainSynced = state.hooks().chainSyncedPredicate();
+			return thread::CreateNamedTask("harvesting task", [&cache, &unlockedAccounts, pHarvesterTask, pConfigHolder, keysDir, primaryHarvestKey, pState, isChainSynced]() {
+				// prune accounts that are not eligible to harvest the next block only when chain is synced
+				if (isChainSynced())
+					PruneUnlockedAccounts(unlockedAccounts, cache, pConfigHolder, primaryHarvestKey);
 
 				// hot-reload new delegated accounts from keys directory and prune deleted files
 				SyncDelegatedHarvesterKeys(unlockedAccounts, keysDir, primaryHarvestKey, pState->first, pState->second, cache, pConfigHolder);

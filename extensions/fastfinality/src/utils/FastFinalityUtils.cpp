@@ -29,7 +29,10 @@ namespace catapult { namespace fastfinality {
 		return config.ResourcesPath / "delegated_keys";
 	}
 
-	void SyncDelegatedHarvesterKeys(harvesting::UnlockedAccounts& unlockedAccounts, const boost::filesystem::path& keysDir) {
+	void SyncDelegatedHarvesterKeys(
+			harvesting::UnlockedAccounts& unlockedAccounts,
+			const boost::filesystem::path& keysDir,
+			const Key& primaryHarvestKey) {
 		static std::time_t lastCheckTime = 0;
 		static uint32_t tickCounter = 0;
 
@@ -48,6 +51,8 @@ namespace catapult { namespace fastfinality {
 		lastCheckTime = currentWriteTime;
 
 		utils::KeySet keysOnDisk;
+		if (Key() != primaryHarvestKey)
+			keysOnDisk.insert(primaryHarvestKey);
 
 		for (boost::filesystem::directory_iterator it(keysDir, ec), end; it != end && !ec; it.increment(ec)) {
 			if (!boost::filesystem::is_regular_file(it->status()) || it->path().extension() != ".key")
@@ -92,38 +97,17 @@ namespace catapult { namespace fastfinality {
 			}
 		}
 
-		// Always protect primary harvestKey from config-harvesting.properties
-		boost::filesystem::path harvestConfigPath = keysDir.parent_path() / "config-harvesting.properties";
-		if (boost::filesystem::exists(harvestConfigPath, ec) && !ec) {
-			try {
-				std::ifstream configFile(harvestConfigPath.string());
-				std::string line;
-				while (std::getline(configFile, line)) {
-					auto pos = line.find('=');
-					if (pos != std::string::npos) {
-						auto key = line.substr(0, pos);
-						key.erase(std::remove_if(key.begin(), key.end(), [](unsigned char ch) { return std::isspace(ch); }), key.end());
-						if (key == "harvestKey") {
-							auto val = line.substr(pos + 1);
-							val.erase(std::remove_if(val.begin(), val.end(), [](unsigned char ch) { return std::isspace(ch); }), val.end());
-							if (crypto::IsValidKeyString(val)) {
-								keysOnDisk.insert(crypto::KeyPair::FromString(val).publicKey());
-							}
-						}
-					}
-				}
-			} catch (...) {}
-		}
-
 		// Prune any accounts in unlockedAccounts that were deleted from disk (excluding primary harvest key)
-		unlockedAccounts.modifier().removeIf([&keysOnDisk](const auto& key) {
+		unlockedAccounts.modifier().removeIf([&keysOnDisk, &primaryHarvestKey](const auto& key) {
+			if (key == primaryHarvestKey)
+				return false;
 			return keysOnDisk.find(key) == keysOnDisk.end();
 		});
 	}
 
 	std::shared_ptr<harvesting::UnlockedAccounts> CreateUnlockedAccounts(const harvesting::HarvestingConfiguration& config) {
 		auto pUnlockedAccounts = std::make_shared<harvesting::UnlockedAccounts>(config.MaxUnlockedAccounts);
-		if (config.IsAutoHarvestingEnabled) {
+		if (config.IsAutoHarvestingEnabled && crypto::IsValidKeyString(config.HarvestKey)) {
 			auto keyPair = crypto::KeyPair::FromString(config.HarvestKey);
 			auto publicKey = keyPair.publicKey();
 

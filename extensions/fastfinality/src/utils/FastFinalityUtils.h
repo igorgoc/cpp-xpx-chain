@@ -31,7 +31,10 @@ namespace catapult {
 namespace catapult { namespace fastfinality {
 
 	boost::filesystem::path GetDelegatedKeysDirectory(const harvesting::HarvestingConfiguration& config);
-	void SyncDelegatedHarvesterKeys(harvesting::UnlockedAccounts& unlockedAccounts, const boost::filesystem::path& keysDir);
+	void SyncDelegatedHarvesterKeys(
+			harvesting::UnlockedAccounts& unlockedAccounts,
+			const boost::filesystem::path& keysDir,
+			const Key& primaryHarvestKey);
 	std::shared_ptr<harvesting::UnlockedAccounts> CreateUnlockedAccounts(const harvesting::HarvestingConfiguration& config);
 	harvesting::BlockGenerator CreateHarvesterBlockGenerator(extensions::ServiceState& state);
 	handlers::PullBlocksHandlerConfiguration CreatePullBlocksHandlerConfiguration(const config::NodeConfiguration& nodeConfig);

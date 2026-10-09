@@ -419,7 +419,10 @@ namespace catapult { namespace fastfinality {
 		return [pFsmWeak, lastBlockElementSupplier, &state]() {
 			TRY_GET_FSM()
 
-			SyncDelegatedHarvesterKeys(*pFsmShared->fastFinalityData().unlockedAccounts(), pFsmShared->fastFinalityData().delegatedKeysDirectory());
+			SyncDelegatedHarvesterKeys(
+					*pFsmShared->fastFinalityData().unlockedAccounts(),
+					pFsmShared->fastFinalityData().delegatedKeysDirectory(),
+					pFsmShared->fastFinalityData().primaryHarvestKey());
 
 		  	pFsmShared->resetChainSyncData();
 			pFsmShared->setNodeWorkState(NodeWorkState::Running);
@@ -595,7 +598,7 @@ namespace catapult { namespace fastfinality {
 			auto committee = pluginManager.getCommitteeManager(Block_Version).committee();
 			auto round = fastFinalityData.round();
 			const auto& blockProducer = committee.BlockProposers[round.TimeSliceIndex];
-			SyncDelegatedHarvesterKeys(*fastFinalityData.unlockedAccounts(), fastFinalityData.delegatedKeysDirectory());
+			SyncDelegatedHarvesterKeys(*fastFinalityData.unlockedAccounts(), fastFinalityData.delegatedKeysDirectory(), fastFinalityData.primaryHarvestKey());
 
 			auto accounts = fastFinalityData.unlockedAccounts()->view();
 			auto blockProducerIter = std::find_if(accounts.begin(), accounts.end(), [&committee, &blockProducer](const auto& keyPair) {
@@ -661,6 +664,12 @@ namespace catapult { namespace fastfinality {
 
 			if (!config.Network.EnableDbrbFastFinality) {
 				CATAPULT_LOG(warning) << "skipping block propose attempt due to DBRB fast finality is disabled";
+				pFsmShared->processEvent(BlockGenerationFailed{});
+				return;
+			}
+
+			if (!fastFinalityData.blockProducer()) {
+				CATAPULT_LOG(warning) << "skipping block propose attempt due to null block producer";
 				pFsmShared->processEvent(BlockGenerationFailed{});
 				return;
 			}
