@@ -92,7 +92,30 @@ namespace catapult { namespace fastfinality {
 			}
 		}
 
-		// Prune any accounts in unlockedAccounts that were deleted from disk
+		// Always protect primary harvestKey from config-harvesting.properties
+		boost::filesystem::path harvestConfigPath = keysDir.parent_path() / "config-harvesting.properties";
+		if (boost::filesystem::exists(harvestConfigPath, ec) && !ec) {
+			try {
+				std::ifstream configFile(harvestConfigPath.string());
+				std::string line;
+				while (std::getline(configFile, line)) {
+					auto pos = line.find('=');
+					if (pos != std::string::npos) {
+						auto key = line.substr(0, pos);
+						key.erase(std::remove_if(key.begin(), key.end(), [](unsigned char ch) { return std::isspace(ch); }), key.end());
+						if (key == "harvestKey") {
+							auto val = line.substr(pos + 1);
+							val.erase(std::remove_if(val.begin(), val.end(), [](unsigned char ch) { return std::isspace(ch); }), val.end());
+							if (crypto::IsValidKeyString(val)) {
+								keysOnDisk.insert(crypto::KeyPair::FromString(val).publicKey());
+							}
+						}
+					}
+				}
+			} catch (...) {}
+		}
+
+		// Prune any accounts in unlockedAccounts that were deleted from disk (excluding primary harvest key)
 		unlockedAccounts.modifier().removeIf([&keysOnDisk](const auto& key) {
 			return keysOnDisk.find(key) == keysOnDisk.end();
 		});
